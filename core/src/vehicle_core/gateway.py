@@ -5,11 +5,17 @@ Cosmos のロールではコンテナーより細かく絞れないため、メ�
 """
 
 from collections.abc import Callable
+from datetime import datetime
 
 from pydantic import BaseModel, ValidationError
 
+from .clock import to_jst
 from .constants import AGENT_TEAMS, VEHICLE_ID, Team
-from .models import CONTAINER_MODELS, AgentMail, MailKind, Message, MessageRole
+from .escalation import needs_escalation
+from .models import CONTAINER_MODELS, AgentMail, MailKind, Message, MessageRole, Proposal, ProposalStatus
+
+# アシスタントの発言の author。人の ID を名乗らせない
+ASSISTANT_AUTHOR = "agent"
 
 
 class WriteDenied(Exception):
@@ -34,9 +40,16 @@ def authorize_agent_write(
     container: str,
     doc: dict,
     lookup_message: Callable[[str], Message | None],
+    *,
+    lookup_thread: Callable[[str], list[AgentMail]],
+    now: datetime,
 ) -> BaseModel:
-    """許可なら検証済みのモデルを返す。拒否なら WriteDenied。"""
+    """許可なら検証済みのモデルを返す（created_at は窓口の時刻 now に置き換える）。拒否なら WriteDenied。
+
+    呼び出し側は、返されたモデルを新規作成で保存する（既存の ID の上書きはしない）。
+    """
     team = _caller(caller_team)
+    now = to_jst(now)
 
     if container not in AGENT_WRITABLE:
         raise WriteDenied(f"エージェントは {container} に書き込めません")
@@ -50,12 +63,21 @@ def authorize_agent_write(
         raise WriteDenied("車種 ID が違います")
 
     if isinstance(model, AgentMail):
-        _check_mail(team, model, lookup_message)
+        _check_mail(team, model, lookup_message, lookup_thread, now)
     else:
         if model.team != team:
             raise WriteDenied("ほかのチームの文書は書けません")
-        if isinstance(model, Message) and model.role != MessageRole.ASSISTANT:
-            raise WriteDenied("エージェントが書けるのはアシスタントの発言だけです")
+        if isinstance(model, Message):
+            if model.role != MessageRole.ASSISTANT:
+                raise WriteDenied("エージェントが書けるのはアシスタントの発言だけです")
+            if model.author != ASSISTANT_AUTHOR:
+                raise WriteDenied("アシスタントの発言で人の名前を名乗ることはできません")
+        if isinstance(model, Proposal) and (
+            model.status != ProposalStatus.PENDING or model.decided_by is not None or model.decided_at is not None
+        ):
+            raise WriteDenied("提案の承認や却下は人が行います")
+    if "created_at" in type(model).model_fields:
+        model = model.model_copy(update={"created_at": now})
     return model
 
 
@@ -71,16 +93,28 @@ def _caller(caller_team: str | None) -> Team:
     return team
 
 
-def _check_mail(team: Team, mail: AgentMail, lookup_message: Callable[[str], Message | None]) -> None:
+def _check_mail(
+    team: Team,
+    mail: AgentMail,
+    lookup_message: Callable[[str], Message | None],
+    lookup_thread: Callable[[str], list[AgentMail]],
+    now: datetime,
+) -> None:
     if mail.from_team != team:
         raise WriteDenied("送り主のチームが呼び出し元と違います")
     if mail.kind not in AGENT_MAIL_ALLOWED:
         raise WriteDenied(f"{mail.kind} は人の承認が必要です")
     if mail.to_team not in AGENT_TEAMS or mail.to_team == team:
         raise WriteDenied("宛先のチームが正しくありません")
-    if mail.kind == MailKind.ESCALATION and mail.to_team != Team.CHIEF_ENGINEER:
-        raise WriteDenied("判断の依頼はチーフエンジニアにだけ送れます")
+    if mail.kind == MailKind.ESCALATION:
+        if mail.to_team != Team.CHIEF_ENGINEER:
+            raise WriteDenied("判断の依頼はチーフエンジニアにだけ送れます")
+        if not needs_escalation(lookup_thread(mail.thread_id), now).escalate:
+            raise WriteDenied("このスレッドには、チーフエンジニアに判断を仰ぐ条件（できないという返事、期限切れ）がありません")
     if mail.kind == MailKind.HUMAN_REPLY:
         source = lookup_message(mail.source_message_id) if mail.source_message_id else None
         if source is None or source.role != MessageRole.HUMAN or source.team != team:
             raise WriteDenied("人の返事には、自チームの人が書いた発言の ID が必要です")
+        # 伝えるのは人の言葉そのもの。stance はエージェントの解釈
+        if mail.body != source.text:
+            raise WriteDenied("人の返事の本文は、元の発言と同じでなければなりません")

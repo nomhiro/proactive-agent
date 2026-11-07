@@ -28,6 +28,9 @@ def match_test_watches(watches: Iterable[Watch], runs: Iterable[TestRun], new_ru
     """連続失敗の数が見張りの設定値にちょうど達したものだけを返す（それ以降は鳴らさない）。"""
     all_runs = {r.id: r for r in runs}
     all_runs[new_run.id] = new_run
+    # 遅れて届いた古い結果では鳴らさない（連続回数が変わっていないのに二度鳴るのを防ぐ）
+    if any(r.feature == new_run.feature and r.executed_at > new_run.executed_at for r in all_runs.values()):
+        return []
     streak = failure_streak(all_runs.values(), new_run.feature)
     return [
         w for w in watches

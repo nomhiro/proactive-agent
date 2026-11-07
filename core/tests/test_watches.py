@@ -49,3 +49,16 @@ def test_streak_is_same_whether_runs_include_new_run():
     runs = [_run(0, "pass", 0), _run(1, "fail", 1), _run(2, "fail", 2)]
     third = _run(3, "fail", 3)
     assert match_test_watches([REGEN_WATCH], runs + [third], third) == [REGEN_WATCH]
+
+
+def test_late_arriving_older_run_does_not_refire():
+    runs = [_run(0, "pass", 0), _run(1, "fail", 1), _run(2, "fail", 2), _run(3, "fail", 3)]
+    late = _run(9, "pass", -1)  # 遅れて届いた古い結果
+    assert match_test_watches([REGEN_WATCH], runs, late) == []
+
+
+def test_watch_streak_must_be_positive():
+    import pytest
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        REGEN_WATCH.model_validate(REGEN_WATCH.model_dump() | {"streak": 0})

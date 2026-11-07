@@ -82,3 +82,8 @@ def test_quiet_window_that_does_not_cross_midnight():
     lunch = S.model_copy(update={"quiet_start": time(12, 0), "quiet_end": time(13, 0)})
     assert is_quiet(at(18, 12, 30), lunch) is True
     assert is_quiet(at(18, 21, 0), lunch) is False
+
+
+def test_editorial_change_near_safety_is_not_delivered():
+    # 安全要求の近くでも、誤字の修正（silent）は夜中に届けない
+    assert decide_delivery(Classification.SILENT, True, at(17, 23, 0), S).mode == "none"

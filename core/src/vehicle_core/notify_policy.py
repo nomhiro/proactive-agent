@@ -60,9 +60,12 @@ def decide_delivery(
     classification: Classification, touches_safety: bool, now: datetime, settings: TeamSettings
 ) -> DeliveryDecision:
     now = to_jst(now)
+    # 知らせない判定（誤字の修正など）は、安全要求の近くでも届けない
+    if classification == Classification.SILENT:
+        return DeliveryDecision(mode="none", deliver_at=None)
     if touches_safety:
         return DeliveryDecision(mode="immediate", deliver_at=now)
-    if settings.proactivity == Proactivity.OFF or classification == Classification.SILENT:
+    if settings.proactivity == Proactivity.OFF:
         return DeliveryDecision(mode="none", deliver_at=None)
     if classification == Classification.DIGEST:
         if settings.proactivity == Proactivity.IMPORTANT_ONLY:

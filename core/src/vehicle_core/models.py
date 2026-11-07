@@ -4,7 +4,7 @@ from datetime import time
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import AwareDatetime, BaseModel
+from pydantic import AwareDatetime, BaseModel, Field
 
 from .constants import QUIET_END, QUIET_START, VEHICLE_ID, Team
 
@@ -91,7 +91,7 @@ class Watch(BaseModel):
     description: str
     target_ids: list[str] = []
     feature: str | None = None
-    streak: int = 3
+    streak: int = Field(3, ge=1)
     delivery: DeliveryMode
     created_by: str
     created_at: AwareDatetime
