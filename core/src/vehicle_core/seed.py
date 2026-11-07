@@ -59,7 +59,7 @@ _ROWS: list[tuple[ArtifactType, str, Team, str, str, dict[str, Any]]] = [
     (T.REQUIREMENT, "REQ-125", IC, "クリープトルクの滑らかな立ち上がり", "yamada", {"release_ids": R3}),
     (T.SPEC, "SPEC-BRK-02", IC, "前後トルク配分の制御仕様", "yamada", {"links": ["REQ-101"]}),
     (T.SPEC, "SPEC-BRK-04", IC, "回生協調の制御仕様（ブレーキペダル入力）", "tanaka",
-     {"links": ["REQ-112"], "description": "ブレーキペダル位置から目標減速度を求め、回生と油圧に配分する。"}),
+     {"links": ["REQ-112"], "description": "ブレーキペダル位置から目標原則度を求め、回生と油圧に配分する。"}),  # 誤字はシナリオ s0 で直す
     (T.SIGNAL, "SIG-BrkPedalPos", IC, "ブレーキペダル位置（CAN）", "tanaka",
      {"links": ["SPEC-BRK-04"], "attributes": {"period_ms": 10, "sender": "VCU", "receivers": ["MCU", "BCU"]}}),
     (T.MODEL, "MDL-RegenCoord", IC, "回生協調制御モデル", "tanaka",
