@@ -1,0 +1,25 @@
+# ブレインストーミング用の一時ファイル
+.superpowers/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Node
+node_modules/
+dist/
+
+# Azure / 環境設定
+.azure/
+.env
+.env.*
+local.settings.json
+
+# OS / エディタ
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
