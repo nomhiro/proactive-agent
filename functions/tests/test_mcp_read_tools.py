@@ -170,3 +170,27 @@ def test_chief_sees_all_mail(store):
 def test_messages_are_own_team_even_for_chief(store):
     assert [m["id"] for m in call(store, "list_messages", team=IC)] == ["msg-integrated_control"]
     assert call(store, "list_messages", team=CE) == []
+
+
+def test_list_notifications_since_compares_instants_not_strings(store):  # 最終レビューの M2
+    # n-ic は 21:00 JST（12:00Z）。12:30Z より前なので含めない
+    assert call(store, "list_notifications", {"since": "2026-11-17T12:30:00Z"}) == []
+    assert [n["id"] for n in call(store, "list_notifications", {"since": "2026-11-17T11:30:00Z"})] == ["n-ic"]
+
+
+class BrokenBlobs:
+    def __init__(self, exc):
+        self.exc = exc
+
+    def read_text(self, path):
+        raise self.exc
+
+
+def test_get_test_log_with_malformed_blob_path_says_no_log(store):  # 最終レビューの M3
+    res = call_raw(store, "get_test_log", {"test_run_id": "run-s2-1"}, blobs=BrokenBlobs(ValueError("bad path")))
+    assert res["isError"] is True and "ログがありません" in res["content"][0]["text"]
+
+
+def test_get_test_log_storage_error_says_cannot_read(store):  # 最終レビューの M3
+    res = call_raw(store, "get_test_log", {"test_run_id": "run-s2-1"}, blobs=BrokenBlobs(RuntimeError("403")))
+    assert res["isError"] is True and "ログを読めませんでした" in res["content"][0]["text"]

@@ -152,10 +152,14 @@ def _identity(project, name: str) -> dict:
 
 def ensure_memory_store(project, name: str, chat_model: str, embedding_model: str) -> str:
     from azure.ai.projects.models import MemoryStoreDefaultDefinition, MemoryStoreDefaultOptions
+    from azure.core.exceptions import HttpResponseError, ResourceNotFoundError
     try:
         project.beta.memory_stores.get(name)
         return "exists"
-    except Exception:  # noqa: BLE001 — ないときの例外の型は版で変わる
+    except HttpResponseError as e:
+        # ないとき（404）だけ作る。権限や通信のエラーはそのまま出す
+        if not isinstance(e, ResourceNotFoundError) and getattr(e, "status_code", None) != 404:
+            raise
         project.beta.memory_stores.create(
             name=name, description="チームの好み（scope はチーム）",
             definition=MemoryStoreDefaultDefinition(

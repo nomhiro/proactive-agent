@@ -91,6 +91,8 @@ def handle_mcp_http(
     except (ValueError, UnicodeDecodeError, RecursionError):  # RecursionError は深すぎる入れ子
         return McpHttpResult(status=200, body=protocol._err(None, -32700, "本文が JSON ではありません"))
 
+    if msg == []:  # 空のバッチは JSON-RPC では不正な要求
+        return McpHttpResult(status=200, body=protocol._err(None, -32600, "空のバッチです"))
     messages = msg if isinstance(msg, list) else [msg]
     if team is None and any(protocol.needs_token(m) for m in messages):
         return McpHttpResult(status=401, body={"reason": "Bearer トークンがありません"})

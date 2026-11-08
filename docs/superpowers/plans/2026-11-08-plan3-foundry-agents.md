@@ -699,6 +699,7 @@ def test_routine_specs_use_tokyo_8am_and_stable_names(): ...   # 決定 16 が r
 - **フックの順番**: RAI ポリシーはエージェントより先に作る（定義の `rai_config` が参照する）。統括の A2A の道具は相手ごとに1つ（接続 `a2a-<エージェント名>`）
 - **モデルの容量**: 500（50 万トークン/分）にした。50 のままだと、朝 8:00 に4体が同時に動いたときに3体の応答が `rate_limit_exceeded` で失敗し、`run-morning-…` が running のまま残った。Azure Monitor の ModelRequests には 429 が出ず、自分の会話から4体に同時に送って応答の `error` を見て突き止めた
 - **最終レビューで直したこと**: シードを作り直すときに朝の判定の基準（`last_tick`）も書く。トークンのない MCP の呼び出しは本文を読む前に 401 にし、深い入れ子の JSON は -32700 にする。`begin_morning_digest` は仮想の時刻が朝（8:00〜11:59）のときだけ通し、running のまま 15 分たった朝のまとめは次の起動が引き継ぐ。時計を動かさずに仮想の 8:00 を迎えても朝のまとめは出ない（実時間の cron と仮想の時計がずれているため。デモでは時計を進める）
+- **最終レビューの小さな指摘で直したこと**: `list_notifications` の `since` は時刻で比べる。形の壊れた `log_blob` は「ログがありません」、Storage のエラーは「ログを読めませんでした」を返す。空のバッチは -32600。Memory ストアは 404 のときだけ作る
 - **設定**: `MEMORY_BACKEND` は足していない（Memory ストアだけ）。`AZURE_STORAGE_BLOB_ENDPOINT` がなければ `get_test_log` は「ログがありません」を返す
 
 ### Plan 4 への申し送り

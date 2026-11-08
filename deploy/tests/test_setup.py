@@ -50,3 +50,31 @@ def test_sync_agent_client_ids_creates_missing_team_settings():
     store = DictStore([])
     assert sync_agent_client_ids(store, {Team.EVALUATION: "c-ev"}) == ["evaluation"]
     assert store.get("team_settings", "ts-evaluation")["agent_client_id"] == "c-ev"
+
+
+class FakeStores:
+    def __init__(self, get_error):
+        self.get_error = get_error
+        self.created = []
+
+    def get(self, name):
+        raise self.get_error
+
+    def create(self, **kwargs):
+        self.created.append(kwargs["name"])
+
+
+def test_ensure_memory_store_creates_only_when_missing():  # 最終レビューの M6
+    from types import SimpleNamespace
+
+    import pytest
+    from azure.core.exceptions import HttpResponseError, ResourceNotFoundError
+
+    from proactive_deploy.setup import ensure_memory_store
+    missing = FakeStores(ResourceNotFoundError("not found"))
+    assert ensure_memory_store(SimpleNamespace(beta=SimpleNamespace(memory_stores=missing)), "m", "c", "e") == "created"
+    assert missing.created == ["m"]
+    forbidden = FakeStores(HttpResponseError(message="Forbidden"))
+    with pytest.raises(HttpResponseError):
+        ensure_memory_store(SimpleNamespace(beta=SimpleNamespace(memory_stores=forbidden)), "m", "c", "e")
+    assert forbidden.created == []

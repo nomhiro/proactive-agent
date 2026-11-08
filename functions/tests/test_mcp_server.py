@@ -123,3 +123,8 @@ def test_http_without_token_is_rejected_before_reading_body():  # 最終レビ�
     res = handle_mcp_http("POST", None, b"[" * 200_000, verifier=FakeVerifier(), store=store_with_mapping(),
                           registry=CountingRegistry(), make_ctx=lambda team: made.append(team))
     assert res.status == 401 and made == []
+
+
+def test_http_empty_batch_is_invalid_request():  # 最終レビューの M8
+    res, reg = post([])
+    assert res.status == 200 and res.body["error"]["code"] == -32600 and reg.calls == []

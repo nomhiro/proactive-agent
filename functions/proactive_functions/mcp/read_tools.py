@@ -1,5 +1,7 @@
 """読み取りの道具（設計書 7.5 節）。範囲は scope.py の表に従う。"""
 
+import logging
+from datetime import datetime
 from typing import Any
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict
@@ -14,6 +16,8 @@ from ..handlers import load_graph
 from .context import ToolContext, ToolError
 from .protocol import Registry, Tool
 from .scope import effective_team, read_scope
+
+log = logging.getLogger(__name__)
 
 LOG_LIMIT = 200_000
 SEARCH_LIMIT_MAX = 200
@@ -101,7 +105,15 @@ def get_test_log(ctx: ToolContext, args: dict) -> dict:
     if doc is None:
         raise ToolError(f"試験結果がありません: {a.test_run_id}")
     run = TestRun.model_validate(doc)
-    text = ctx.blobs.read_text(run.log_blob) if run.log_blob and ctx.blobs is not None else None
+    text = None
+    if run.log_blob and ctx.blobs is not None:
+        try:
+            text = ctx.blobs.read_text(run.log_blob)
+        except ValueError:  # 「コンテナ/名前」の形でない log_blob は、ログがないのと同じ
+            text = None
+        except Exception:  # noqa: BLE001 — Storage の権限や通信の失敗
+            log.exception("get_test_log: blob read failed: %s", run.log_blob)
+            raise ToolError(f"ログを読めませんでした: {a.test_run_id}") from None
     if text is None:
         raise ToolError(f"ログがありません: {a.test_run_id}")
     return {"test_run_id": run.id, "csv": text[:LOG_LIMIT], "truncated": len(text) > LOG_LIMIT}
@@ -151,8 +163,8 @@ class NotificationsArgs(TeamListArgs):
 def list_notifications(ctx: ToolContext, args: dict) -> list[dict]:
     a = NotificationsArgs.model_validate(args)
     docs = ctx.store.query("notifications", _team_filter(ctx, "notifications", a.team) or None)
-    if a.since:
-        docs = [d for d in docs if str(d.get("created_at", "")) >= a.since.isoformat()]
+    if a.since:  # 文字列ではなく時刻で比べる（タイムゾーンの違う since でも範囲がずれない）
+        docs = [d for d in docs if d.get("created_at") and datetime.fromisoformat(d["created_at"]) >= a.since]
     return _newest(docs, "created_at", LIST_LIMIT)
 
 
