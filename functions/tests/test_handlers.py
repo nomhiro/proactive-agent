@@ -1,0 +1,89 @@
+from datetime import datetime
+
+import pytest
+from vehicle_core.constants import JST
+from vehicle_core.models import AgentMail, Watch
+from vehicle_core.scenarios import SCENARIOS
+from vehicle_core.seed import SEED_NOW, build_dataset
+
+from proactive_functions.handlers import handle_agent_mail, handle_change_events, handle_test_runs, mail_request
+from tests.fakes import MemoryStore
+
+
+@pytest.fixture
+def store():
+    s = MemoryStore()
+    ds = build_dataset()
+    for a in ds.artifacts:
+        s.create("artifacts", a.model_dump(mode="json") | {"origin": "seed"})
+    for r in ds.test_runs:
+        s.create("test_runs", r.model_dump(mode="json") | {"origin": "seed"})
+    return s
+
+
+S1 = SCENARIOS["s1_signal_period"].steps[0].change.model_dump(mode="json")
+
+
+def test_signal_change_enqueues_owner_team(store):
+    [rid] = handle_change_events([S1], store)
+    rec = store.get("investigations", rid)
+    assert rec["team"] == "integrated_control" and rec["floor"] == "notify_now"
+    assert len(rec["impact"]["impacted_ids"]) == 8
+
+
+def test_same_batch_twice_makes_one_request(store):  # Review Focus 1
+    handle_change_events([S1], store)
+    assert handle_change_events([S1], store) == []
+    assert len(store.query("investigations")) == 1
+
+
+def test_seed_docs_are_ignored(store):  # Review Focus 2
+    seeded = [r.model_dump(mode="json") | {"origin": "seed"} for r in build_dataset().test_runs]
+    assert handle_test_runs(seeded, store) == []
+    assert handle_change_events([S1 | {"origin": "seed"}], store) == []
+    assert store.query("investigations") == []
+
+
+def test_broken_doc_is_skipped_and_rest_processed(store):  # Review Focus 5
+    broken = {"id": "ce-bad", "vehicle_id": "kakuu-suv", "artifact_id": "SIG-BrkPedalPos"}
+    assert len(handle_change_events([broken, S1], store)) == 1
+
+
+def test_third_hils_failure_with_watch_enqueues(store):
+    store.create("watches", Watch(id="w1", team="integrated_control", kind="test_failure_streak",
+                                  description="回生協調の HILS", feature="regen_coord", streak=3,
+                                  delivery="immediate", created_by="tanaka",
+                                  created_at=SEED_NOW).model_dump(mode="json"))
+    ids = []
+    for st in SCENARIOS["s2_hils_streak"].steps:
+        doc = st.test_run.model_dump(mode="json")
+        store.create("test_runs", doc)
+        ids += handle_test_runs([doc], store)
+    last = store.get("investigations", ids[-1])
+    assert last["floor"] == "notify_now" and last["matched_watch_ids"] == ["w1"]
+    assert [store.get("investigations", i)["floor"] for i in ids[:-1]] == ["silent", "silent"]
+
+
+def test_impact_notice_mail_wakes_recipient_with_notify_now(store):
+    mail = AgentMail(id="am-1", thread_id="th-1", from_team="integrated_control", to_team="motor_control",
+                     kind="impact_notice", body="MDL-MotorTq に影響", related_artifact_ids=["SIG-BrkPedalPos"],
+                     created_at=datetime(2026, 11, 18, 8, 5, tzinfo=JST))
+    [rid] = handle_agent_mail([mail.model_dump(mode="json")], store)
+    rec = store.get("investigations", rid)
+    assert rec["team"] == "motor_control" and rec["trigger"] == "mail" and rec["floor"] == "notify_now"
+    assert rec["origin_artifact_id"] == "SIG-BrkPedalPos" and rec["source_ids"] == ["am-1"]
+
+
+def test_analysis_request_mail_is_silent_floor(store):
+    mail = AgentMail(id="am-2", thread_id="th-1", from_team="integrated_control", to_team="evaluation",
+                     kind="analysis_request", body="応答の遅れを見て",
+                     created_at=datetime(2026, 11, 17, 21, 20, tzinfo=JST))
+    [rid] = handle_agent_mail([mail.model_dump(mode="json")], store)
+    rec = store.get("investigations", rid)
+    assert rec["floor"] == "silent" and rec["origin_artifact_id"] is None
+
+
+def test_mail_to_team_without_agent_is_ignored():
+    mail = AgentMail(id="am-3", thread_id="th-2", from_team="integrated_control", to_team="battery_control",
+                     kind="impact_notice", body="x", created_at=datetime(2026, 11, 18, 8, 5, tzinfo=JST))
+    assert mail_request(mail) is None
