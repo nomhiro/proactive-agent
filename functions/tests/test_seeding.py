@@ -53,3 +53,21 @@ def test_reset_clears_and_keeps_agent_client_id():
     assert store.get("team_settings", "ts-integrated_control")["agent_client_id"] == "agent-ic"
     assert store.get("team_settings", "ts-motor_control").get("agent_client_id") is None
     assert virtual_now(store) == SEED_NOW
+
+
+class FakeBlobWriter:
+    def __init__(self):
+        self.files = {}
+
+    def write_text(self, path, text):
+        self.files[path] = text
+
+
+def test_seed_uploads_scenario_logs():
+    from vehicle_core.hils_logs import scenario_log_blobs
+
+    from proactive_functions.seeding import upload_hils_logs
+    writer = FakeBlobWriter()
+    n = upload_hils_logs(writer, scenario_log_blobs())
+    assert n == len(writer.files) >= 3
+    assert {f"hils-logs/TC-HILS-031/s2-{i}.csv" for i in (1, 2, 3)} <= writer.files.keys()

@@ -8,6 +8,7 @@ dependencies = [
     "azure-cosmos>=4.9",
     "azure-identity>=1.19",
     "azure-messaging-webpubsubservice>=1.2",
+    "azure-storage-blob>=12.20",
     "pyjwt[crypto]>=2.9",
     "vehicle-core",
 ]

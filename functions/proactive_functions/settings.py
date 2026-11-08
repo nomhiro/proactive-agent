@@ -15,6 +15,8 @@ class Settings(BaseModel):
     gateway_tenant_id: str
     gateway_audiences: list[str]
     agent_invoker: Literal["log"] = "log"
+    # HILS ログを読む Blob のエンドポイント。なければ get_test_log は「ログがありません」を返す
+    blob_endpoint: str | None = None
 
 
 def load_settings(env: Mapping[str, str] = os.environ) -> Settings:
@@ -26,4 +28,5 @@ def load_settings(env: Mapping[str, str] = os.environ) -> Settings:
         gateway_tenant_id=env["GATEWAY_TENANT_ID"],
         gateway_audiences=[a.strip() for a in env["GATEWAY_AUDIENCES"].split(",") if a.strip()],
         agent_invoker=env.get("AGENT_INVOKER", "log"),
+        blob_endpoint=env.get("AZURE_STORAGE_BLOB_ENDPOINT") or None,
     )

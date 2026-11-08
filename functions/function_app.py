@@ -29,6 +29,7 @@ def _deps() -> SimpleNamespace:
     from azure.identity import DefaultAzureCredential
 
     from proactive_functions.auth import EntraTokenVerifier
+    from proactive_functions.blobs import AzureBlobs
     from proactive_functions.clock import StoredClock
     from proactive_functions.investigations import LoggingInvoker
     from proactive_functions.mcp.server import build_registry
@@ -46,6 +47,7 @@ def _deps() -> SimpleNamespace:
         publisher=WebPubSubPublisher(s.webpubsub_endpoint, s.webpubsub_hub, credential),
         verifier=EntraTokenVerifier(s.gateway_tenant_id, s.gateway_audiences),
         registry=build_registry(),
+        blobs=AzureBlobs(s.blob_endpoint, credential) if s.blob_endpoint else None,
     )
 
 
@@ -80,7 +82,7 @@ def mcp(req: func.HttpRequest) -> func.HttpResponse:
     result = handle_mcp_http(
         req.method, req.headers.get("Authorization"), req.get_body(),
         verifier=d.verifier, store=d.store, registry=d.registry,
-        make_ctx=lambda team: ToolContext(team=team, store=d.store, now=now),
+        make_ctx=lambda team: ToolContext(team=team, store=d.store, now=now, blobs=d.blobs),
     )
     body = json.dumps(result.body, ensure_ascii=False) if result.body is not None else None
     return func.HttpResponse(body, status_code=result.status, mimetype="application/json")

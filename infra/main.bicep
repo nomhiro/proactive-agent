@@ -31,7 +31,7 @@ module monitoring 'modules/monitoring.bicep' = {
 module storage 'modules/storage.bicep' = {
   scope: rg
   name: 'storage'
-  params: { location: location, tags: tags, resourceToken: resourceToken }
+  params: { location: location, tags: tags, resourceToken: resourceToken, deployerPrincipalId: principalId }
 }
 
 module identity 'modules/identity.bicep' = {
