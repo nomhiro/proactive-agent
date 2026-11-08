@@ -40,7 +40,7 @@
 
 ### 設計書の隙間を埋めた決定（実装者はこのとおりに作る）
 1. **MCP の受け口**: Functions の HTTP 関数 `POST /api/mcp`。spike の `spike_mcp.py` と同じく、状態を持たない JSON-RPC を JSON で返す（SSE は使わない）。`GET` などは 405。対応する MCP のプロトコル版は `2025-06-18` と `2025-03-26`、それ以外を求められたら `2025-06-18` を返す
-2. **認証の順序**: 本文を読む前にトークンを検証する。トークンがない・不正なら HTTP 401、対応表にない `azp` なら HTTP 403。どちらも道具は1つも動かさない。`initialize` と `tools/list` にもトークンを求める
+2. **認証の順序**: トークンが付いていれば、本文を処理する前に検証する。不正なら HTTP 401、対応表にない `azp` なら HTTP 403。`tools/call` はトークンがなければ HTTP 401。どの場合も道具は1つも動かさない。`initialize`、`ping`、`tools/list` にも Foundry がトークンを付けるかは spike で確かめていないので、Task 1 の Step 2 で確かめ、`protocol.py` の定数 `DISCOVERY_REQUIRES_TOKEN` に結果を入れる。付くなら `True`（トークンがなければ 401）、付かないなら `False`（トークンなしでも答える。返すのは道具の一覧だけで、データには触れない）
 3. **トークンの宛先**: Plan 2 の書き込み窓口用アプリ登録（`gateway-app.bicep`、出力 `GATEWAY_APP_ID` / `GATEWAY_APP_ID_URI`）を、そのまま MCP サーバーの宛先に使う。名前は変えない（アプリ登録を作り直さないため）。`GATEWAY_AUDIENCES` には app ID と URI の両方を入れる（spike で `aud` は app ID の GUID だった）
 4. **HTTP の書き込み窓口を外す**: `agent/{container}/{item_id?}` のルートと `gateway_http.py` を消す。保存の処理（新規作成、作業記録の置き換え、見張りの削除、通知の配達時刻の決め直し）は `proactive_functions/agent_writes.py` に移し、MCP の書き込みの道具から呼ぶ
 5. **道具の引数で決めさせないもの**: `id`、`team`、`vehicle_id`、`created_at`、`author`、`role` はサーバーが決める。エージェントが渡しても無視する。ID は `<接頭辞>-<uuid4 の先頭12文字>`（例: `msg-1a2b3c4d5e6f`）
@@ -54,7 +54,8 @@
 13. **記憶の置き場所**: `MemoryBackend` の境目を作り、Task 1 の確認 5 の結果で実装を1つ選ぶ（成り立てば Foundry の Memory ストア、成り立たなければ Cosmos の `team_memory` コンテナ）。scope はチームの値
 14. **グラフ**: Task 1 の確認 4 が成り立てば、エージェントは Foundry Files のファイル ID を `post_message` の `attachments` に `foundry-file:<ID>` として入れる。成り立たなければ、道具 `save_chart_data` を足し、グラフの数値（題名、軸の名前、系列ごとの点の列）を Blob の `analysis-artifacts/chart-<uuid4 の先頭12文字>.json` に置いて、その参照 `blob:analysis-artifacts/chart-<…>.json` を返す。エージェントはそれを `post_message` の `attachments` に入れる。道具は Task 5 に足し、Functions の ID に `analysis-artifacts` への書き込み権限を付ける
 15. **尋ねる手段**: Task 1 の確認 8 が成り立てば、統括に A2A の道具（相手は3体）を付ける。成り立たなければ付けない（`send_mail` の `question` / `answer` で尋ねる）
-16. **Routines**: Task 1 の確認 7 が成り立てば、朝のまとめとブリーフィングの `schedules`（`sch-digest-*`、`sch-briefing-*`）をシードから外し、Routines を作る。成り立たなければ `schedules` を残し、Routines は作らない（Task 2 と Task 10 の該当の手順を飛ばす）
+16. **Routines**: Task 1 の確認 7 が成り立てば、朝のまとめとブリーフィングの `schedules`（`sch-digest-*`、`sch-briefing-*`）をシードから外し、Routines を作る。成り立たなければ `schedules` を残し、Routines は作らない（Task 2、7、10 の該当の手順を飛ばす）
+17. **時計を進めたときの Routines の手動起動**: 時計を進める側（CLI の `scripts/clock.py`、Plan 4 のシナリオ再生）は `system/clock` を書くだけにする。手動起動は tick が行う。tick は `system` コンテナの文書 `last_tick`（`{"id": "last_tick", "at": <前回の仮想の時刻>, "offset_seconds": <前回のずれ>}`）と今回を比べ、ずれが変わっていて、かつ `crossed_morning(前回, 今回)` が真のときだけ、4体の Routines を手動起動する。時計を動かさずに実時間で 8:00 を迎えたときは、Routines 自身の cron に任せる（二重に起動しない）
 
 ## Review Focus
 
@@ -111,7 +112,6 @@ deploy/
 infra/modules/foundry.bicep             # 新規
 infra/main.bicep                        # foundry を足し、出力を足す
 infra/modules/functions.bicep           # アプリ設定を足す
-scripts/clock.py                        # 朝 8:00 を越えたら Routines を手動起動
 scripts/smoke.py                        # Plan 3 の確認を足す
 ```
 
@@ -137,11 +137,17 @@ scripts/smoke.py                        # Plan 3 の確認を足す
 | エージェントの定義 | `azd` か `sdk`（`azd` の場合は agent.yaml の雛形を `spikes/harness/agents/` に残す） |
 | スキルの添付 | 登録と添付に使う API（またはポータル以外に手段がないこと） |
 | RAI の Network ルール | Japan East で使えるか、PyPI だけを許可できたか |
+| harness の道具 | Web 取得とサブエージェントを外せるか、外す方法 |
+| 決定 2 | `DISCOVERY_REQUIRES_TOKEN` の値 |
+| 決定 17 | Functions の ID で Routines を手動起動できたか、要ったロール |
 
-- [ ] **Step 1: 【制作者に確認してから】確認用の環境に記憶用のモデルを足す** — Foundry Memory は、チャットのモデルに加えて埋め込みのモデル（`text-embedding-3-small` など）のデプロイを要する。`foundry.bicep` に足し、制作者に「spike の環境に埋め込みモデルのデプロイを足すため `azd provision` を実行します。進めてよいですか」と確認してから実行する。
+- [ ] **Step 1: 【制作者に確認してから】確認用の環境に記憶用のモデルを足す** — Foundry Memory は、チャットのモデルに加えて埋め込みのモデル（`text-embedding-3-small` など）のデプロイを要する。記憶を読み書きする ID には、プロジェクトのスコープで Foundry User に加えて Cognitive Services OpenAI User が要る（ないと書き込みが 401 になる。[Memory のクイックスタート](https://learn.microsoft.com/azure/foundry/agents/quickstarts/quickstart-memory-hosted-agent#prerequisites)）。埋め込みモデルと、デプロイする人と Functions の ID へのこのロールを `foundry.bicep` に足し、制作者に「spike の環境に埋め込みモデルのデプロイを足すため `azd provision` を実行します。進めてよいですか」と確認してから実行する。
   Expected: `azd provision` が成功し、`azd env get-values` に埋め込みモデルのデプロイ名が出る
 
-- [ ] **Step 2: 確認 4（グラフ）** — `probe_files.py`: spike-a に「scipy で一次遅れのステップ応答を描き、PNG を返して」と頼み、応答の中のファイル ID を、デプロイした人の ID（Foundry User）で `project.get_openai_client().files.content(<ID>)` から取得する。
+- [ ] **Step 2: 探索のメソッドにトークンが付くか（決定 2）** — spike の `mcp/function_app.py` の MCP の処理で、要求ごとに「メソッド名」と「検証できたトークンがあったか」を Blob の `probe-results/mcp-log/<時刻>-<メソッド>.json` に書く（トークンそのものは書かない）。`azd deploy` してから `probe.py mcp` を流し、書かれたファイルを読む。
+  Expected: `initialize`、`notifications/initialized`、`tools/list`、`tools/call` のそれぞれについて、トークンの有無が記録される。決定 2 の `DISCOVERY_REQUIRES_TOKEN` に結果を書く
+
+- [ ] **Step 2b: 確認 4（グラフ）** — `probe_files.py`: spike-a に「scipy で一次遅れのステップ応答を描き、PNG を返して」と頼み、応答の中のファイル ID を、デプロイした人の ID（Foundry User）で `project.get_openai_client().files.content(<ID>)` から取得する。
   Run: `uv run --no-project --with-requirements scripts/requirements.txt python scripts/probe_files.py`
   Expected（成り立つ条件）: 取得したバイト列の先頭が PNG の印（`\x89PNG`）。成り立たなければ決定 14 は `chart-data`
 
@@ -149,13 +155,14 @@ scripts/smoke.py                        # Plan 3 の確認を足す
   Expected: 4つとも期待どおり。項目単位の削除ができなければ決定 13 は `cosmos`
 
 - [ ] **Step 4: 確認 7（Routines）** — `probe_routines.py`: spike-a に cron `0 8 * * *`、`Asia/Tokyo` の Routine を作り、`dispatch_async` で起動し、実行の履歴に完了が出ること、harness の会話がどう作られるか（実行ごとに新しい会話か）を記録する。最後に Routine を消す。
-  Expected: 作成・手動起動・完了の3つが成り立つ。どれかが成り立たなければ決定 16 は `schedules`
+  手動起動は、デプロイした人の ID に加えて、Functions のマネージド ID からも試す（決定 17 で tick が起動するため。`probe` キューに `{"kind": "routine"}` の分岐を足す）。足りないロールがあれば記録する。
+  Expected: 作成・手動起動（両方の ID）・完了が成り立つ。どれかが成り立たなければ決定 16 は `schedules`
 
 - [ ] **Step 5: 確認 8（A2A）** — `probe_a2a.py`: spike-b の受け側 A2A を有効にし、A2A の道具（相手は spike-b）を持つ `spike-chief` を作る。`spike-chief` の `instance_identity` に Foundry Agent Consumer を付け、「spike-b に whoami の結果を聞いて」と頼む。
   Expected: 応答に spike-b の whoami の結果が入る。成り立たなければ決定 15 は `mail`
 
-- [ ] **Step 6: azd での定義とスキルの添付** — `spikes/harness/azure.yaml` に `azure.ai.agent` のサービスを1つ足し（`AZD_ALPHA_ENABLE_AGENTS_MANAGED_HARNESS=true`）、harness、MCP の道具（接続 `spike-mcp`）、スキル1つを宣言して `azd deploy` する。スキルの登録と添付の方法（API かポータルか）もここで確かめる。
-  Expected: できたエージェントが `probe.py mcp` と同じく whoami を呼べる。できなければ、エージェントの定義は `sdk`
+- [ ] **Step 6: azd での定義とスキルの添付** — `spikes/harness/azure.yaml` に `azure.ai.agent` のサービスを1つ足し（`AZD_ALPHA_ENABLE_AGENTS_MANAGED_HARNESS=true`）、harness、MCP の道具（接続 `spike-mcp`）、スキル1つを宣言して `azd deploy` する。スキルの登録と添付の方法（API かポータルか）もここで確かめる。あわせて、harness の道具のうち Web 取得とサブエージェントを外せるか（`MicrosoftCopilotHarness` か azd の定義に道具の一覧を渡せるか）を確かめる。
+  Expected: できたエージェントが `probe.py mcp` と同じく whoami を呼べる。できなければ、エージェントの定義は `sdk`。道具を外せたら、決定の表に「harness の道具: 外せる（渡し方）」、外せなければ「外せない（指示文で禁止）」と書く
 
 - [ ] **Step 7: RAI ポリシーの Network ルール** — Japan East で Network ルールを作り、PyPI のホストだけを許可して spike-a に付ける。`pip install numpy` が通り、`curl https://example.com` が止まることを確かめる。
   Expected: 両方とも期待どおり。作れなければ、設計書 12 節の代わりの方法（絞らずに README に書く）
@@ -262,7 +269,9 @@ def test_tool_error_becomes_is_error_result():
     assert res["isError"] is True and "ほかのチーム" in res["content"][0]["text"]
 def test_missing_required_argument_is_is_error_result(): ...  # inputSchema の required が欠けている
 
-def test_http_rejects_missing_token():                     # status 401、registry の handler は呼ばれない
+def test_http_rejects_tools_call_without_token():          # status 401、registry の handler は呼ばれない
+def test_http_discovery_without_token_follows_setting():   # DISCOVERY_REQUIRES_TOKEN が True なら 401、False なら tools/list が返る（両方を monkeypatch で確かめる）
+def test_http_rejects_invalid_token_even_on_discovery():   # 不正なトークン付きの tools/list は 401
 def test_http_rejects_unmapped_client_with_403():          # verify は通るが team_settings にない client ID
 def test_http_rejects_non_post_with_405(): ...
 def test_http_non_json_body_is_parse_error():              # status 200、error.code == -32700
@@ -454,7 +463,7 @@ def test_forget_removes_item_from_recall(): ...   # 設計書 7.7 節「確実�
 - Test: `functions/tests/test_foundry_invoker.py`、`functions/tests/test_prompts.py`、`functions/tests/test_tick.py`
 
 **Interfaces:**
-- Consumes: Task 2 の `agent_name(team)`、Plan 2 の `AgentInvoker`、`InvestigationRequest`
+- Consumes: Task 2 の `agent_name(team)`、`crossed_morning`、Plan 2 の `AgentInvoker`、`InvestigationRequest`。`RoutineDispatcher` と `morning_dispatch_due` も `foundry_invoker.py` に置く
 - Produces:
   - `investigation_prompt(req: InvestigationRequest, run_id: str, schedules: list[Schedule]) -> str`（`prompts.py`）
   - `ResponsesClient`（Protocol、`foundry_invoker.py`）: `create_conversation() -> str`、`start_response(conversation_id: str, prompt: str) -> str`（応答 ID）、`response_status(response_id: str) -> str`
@@ -462,6 +471,7 @@ def test_forget_removes_item_from_recall(): ...   # 設計書 7.7 節「確実�
   - `FoundryInvoker(store: Store, client_for: Callable[[Team], ResponsesClient], clock: Callable[[], datetime])`: `invoke(request) -> None`（決定 10）
   - `reconcile_runs(store: Store, client_for: Callable[[Team], ResponsesClient], now: datetime) -> list[str]`（決定 11。片付けた作業記録の ID）
   - `Settings.agent_invoker: Literal["log", "foundry"]`、`Settings.foundry_project_endpoint: str | None`（`"foundry"` なら必須）
+  - 決定 16 が `routines` の場合（決定 17）: `RoutineDispatcher`（Protocol）: `dispatch(team: Team) -> None`。実装 `FoundryRoutineDispatcher(project_endpoint, credential)` は Task 1 の `probe_routines.py` で確かめた呼び方を使い、Routine 名は `morning-<エージェント名>`（Task 10 と同じ）。`morning_dispatch_due(store: Store, now: datetime, offset_seconds: float) -> bool` は `last_tick` を読んで判定し、今回の値で書き換える。`run_tick` は真のとき4体の `dispatch` を呼ぶ（1体の失敗はログに残して残りを続ける）
 
 - [ ] **Step 1: 失敗するテストを書く**
 
@@ -491,6 +501,12 @@ def test_reconcile_closes_failed_response(): ...               # status "failed"
 def test_reconcile_closes_completed_but_running(): ...         # detail.closed_by == "tick"
 def test_reconcile_leaves_in_progress_and_recent_runs(): ...   # 2 分以内、または in_progress は触らない
 def test_settings_require_endpoint_for_foundry_invoker(): ...
+# 決定 16 が routines の場合だけ
+def test_morning_dispatch_when_clock_moved_across_8am(): ...   # 前回 11/17 21:14（ずれ A）→ 今回 11/18 08:00（ずれ B）で True
+def test_no_dispatch_when_real_time_passes_8am(): ...          # ずれが同じなら 8:00 を越えても False（cron に任せる）
+def test_no_dispatch_when_clock_moved_within_day(): ...        # 9:00 → 15:00 は False
+def test_first_tick_without_last_tick_does_not_dispatch(): ... # last_tick がなければ書くだけで False
+def test_tick_dispatches_all_four_and_survives_one_failure(): ...
 ```
 
 - [ ] **Step 2: 失敗を確かめる** — Run: `uv run --directory functions pytest tests/test_foundry_invoker.py tests/test_prompts.py tests/test_tick.py -q` / Expected: FAIL
@@ -562,7 +578,8 @@ def test_regen_model_reproduces_scenario_delay():
 作るもの:
 - Foundry のアカウント（`kind: AIServices`、`allowProjectManagement: true`、`disableLocalAuth: true`）とプロジェクト `proj-proactive`、モデルのデプロイ（既定 `gpt-5.4-mini`、`2026-03-17`、GlobalStandard、容量 50。`MODEL_NAME` / `MODEL_VERSION` で変えられる）
 - ロール（プロジェクトのスコープ）: デプロイする人に Foundry User と Foundry Project Manager、Functions の ID に Foundry User
-- 決定 13 が `foundry` なら埋め込みモデルのデプロイ
+- 決定 13 が `foundry` なら、埋め込みモデルのデプロイと、デプロイする人と Functions の ID への Cognitive Services OpenAI User
+- 決定 17 で Functions の ID に追加のロールが要ると Task 1 でわかった場合は、そのロール
 
 - [ ] **Step 1: Bicep を書く**（インフラなので単体テストの RED-GREEN はない）
 - [ ] **Step 2: 構文を確かめる** — Run: `az bicep build --file infra/main.bicep --stdout > /dev/null` / Expected: エラーなし（警告は README に理由を書けるものだけ）
@@ -575,11 +592,11 @@ def test_regen_model_reproduces_scenario_delay():
 
 **Files:**
 - Create: `deploy/proactive_deploy/definitions.py`、`roles.py`、`setup.py`
-- Modify: `pyproject.toml`（members に `deploy`）、`deploy/pyproject.toml`、`azure.yaml`、`scripts/clock.py`、`README.md`
-- Test: `deploy/tests/test_definitions.py`、`deploy/tests/test_roles.py`、`deploy/tests/test_setup.py`、`functions/tests/test_clock.py` か `scripts` のテスト（`crossed_morning` を使う部分）
+- Modify: `deploy/pyproject.toml`、`azure.yaml`、`README.md`
+- Test: `deploy/tests/test_definitions.py`、`deploy/tests/test_roles.py`、`deploy/tests/test_setup.py`
 
 **Interfaces:**
-- Consumes: Task 2 の `agent_name`、`crossed_morning`、Task 3〜6 の `build_registry()`（道具名の一覧）、Task 8 の `agents/`、Task 9 の環境の値、Plan 2 の `scripts/_azd.py`
+- Consumes: Task 2 の `agent_name`、Task 3〜6 の `build_registry()`（道具名の一覧）、Task 8 の `agents/`、Task 9 の環境の値、Plan 2 の `scripts/_azd.py`
 - Produces:
   - `AgentSpec`（pydantic、`definitions.py`）: `name: str`、`team: Team`、`instructions: str`、`skills: list[str]`、`mcp_allowed_tools: list[str]`、`a2a_targets: list[str]`
   - `agent_specs(root: Path, tool_names: list[str], ask_mode: Literal["a2a", "mail"]) -> list[AgentSpec]`（4件。`a2a` のとき統括の `a2a_targets` はほかの3体の名前、それ以外は空）
@@ -596,7 +613,7 @@ def test_regen_model_reproduces_scenario_delay():
     4. `sync_agent_client_ids`
     5. Routines を作る（決定 16 が `routines` の場合）
     6. RAI ポリシーを作って付ける（Task 1 で使えた場合）
-  - `scripts/clock.py`: 時計を進めたとき `crossed_morning(前, 後)` が真なら、4体の Routines を `dispatch_async` で起動する（決定 16 が `routines` の場合）
+  - Routine 名は `morning-<エージェント名>`（Task 7 の `FoundryRoutineDispatcher` と同じ）。時計を進めたときの手動起動は Task 7 の tick が行う（決定 17）ので、`scripts/clock.py` は変えない
 
 - [ ] **Step 1: 失敗するテストを書く**
 
@@ -612,8 +629,7 @@ def test_role_grants_add_agent_consumer_to_chief_only_in_a2a_mode(): ...
 def test_assignment_name_is_stable(): ...
 def test_apply_grants_treats_existing_assignment_as_success(): ...
 def test_sync_agent_client_ids_updates_only_changed_teams_and_keeps_other_fields(): ...
-def test_routine_specs_use_tokyo_8am(): ...                    # 決定 16 が routines の場合
-def test_clock_dispatches_routines_only_when_crossing_8am(): ... # 偽の dispatcher
+def test_routine_specs_use_tokyo_8am_and_stable_names(): ...   # 決定 16 が routines の場合。名前は morning-asst-…
 ```
 
 - [ ] **Step 2: 失敗を確かめる** — Run: `uv run --package proactive-deploy pytest deploy/tests -q` / Expected: FAIL

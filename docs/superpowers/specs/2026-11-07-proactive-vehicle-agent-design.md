@@ -404,7 +404,7 @@ Cosmos DB のデータ操作の権限（RBAC）は、コンテナ単位が最も
 | 全チーム分 | `artifacts`、`change_events`、`test_runs`、HILS ログ、影響範囲の計算 |
 | 自チーム分。統括は全チーム分 | `notifications`、`proposals`、`agent_runs`、`schedules`、`agent_mail`（自チームが送り手か宛先のもの） |
 | 自チーム分だけ（統括も自分の分だけ） | `messages`、`watches`、`investigations`、記憶（7.7 節） |
-| 全チームのメンバーと役割だけ | `team_settings`（`agent_client_id` と話しかける頻度は返さない） |
+| 全チームのメンバーと役割だけ | `team_settings`（`agent_client_id` は返さない。話しかける頻度と静かな時間帯は自チームの分だけ返す。7.4 節の判断の材料になるため） |
 
 統括を例外にするのは、朝のブリーフィング、リリース前チェック、エスカレーションの判断に、各チームの通知とやり取りの写しが要るからである（4.1、4.2 節）。
 
