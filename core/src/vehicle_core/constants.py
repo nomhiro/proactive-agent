@@ -42,3 +42,10 @@ QUIET_START = time(20, 0)
 QUIET_END = time(8, 0)
 # まとめて知らせる時刻
 DIGEST_TIME = time(8, 0)
+
+
+def agent_name(team: Team) -> str:
+    """Foundry のエージェント名（例: asst-integrated-control）。アシスタントのいないチームは ValueError。"""
+    if team not in AGENT_TEAMS:
+        raise ValueError(f"{team} にはアシスタントがいません")
+    return "asst-" + team.value.replace("_", "-")

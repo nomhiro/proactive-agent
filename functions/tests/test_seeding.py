@@ -23,7 +23,7 @@ def test_seed_into_empty_store():
     store = MemoryStore()
     counts = seed_store(store, reset=False, system_now=NOW)
     assert counts["artifacts"] == 43 and counts["test_runs"] == 26
-    assert counts["team_settings"] == 7 and counts["schedules"] == 5
+    assert counts["team_settings"] == 7 and counts["schedules"] == 1
     assert all(d["origin"] == "seed" for d in store.query("test_runs"))
     assert virtual_now(store) == SEED_NOW
 

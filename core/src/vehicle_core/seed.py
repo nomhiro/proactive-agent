@@ -14,9 +14,8 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from .constants import AGENT_TEAMS, DIGEST_TIME, JST, Team
+from .constants import DIGEST_TIME, JST, Team
 from .models import Artifact, ArtifactType, Person, Schedule, TeamSettings, TestRun
-from .notify_policy import next_time_at
 
 SEED_NOW = datetime(2026, 11, 17, 18, 0, tzinfo=JST)
 
@@ -169,15 +168,11 @@ def build_dataset() -> Dataset:
 
 
 def build_schedules(dataset: Dataset) -> list[Schedule]:
-    """定時の仕事: 各チームの朝のまとめ、統括の朝のブリーフィング、リリース 7 日前の抜け漏れチェック。"""
-    first = next_time_at(SEED_NOW, DIGEST_TIME)
-    day = f"{first:%Y%m%d}"
+    """定時の仕事: リリース 7 日前の抜け漏れチェック。
+
+    各チームの朝のまとめと統括の朝のブリーフィングは、Foundry Routines が起動する（Plan 3 決定 16）。
+    """
     out = []
-    for team in sorted(AGENT_TEAMS):
-        task, kind = ("morning_briefing", "briefing") if team == Team.CHIEF_ENGINEER else ("morning_digest", "digest")
-        series = f"sch-{kind}-{team.value}"
-        out.append(Schedule(id=f"{series}-{day}", team=team, due_at=first, task=task,
-                            payload={"recur": "daily", "series": series}))
     for rel in (a for a in dataset.artifacts if a.type == ArtifactType.RELEASE):
         due = datetime.fromisoformat(rel.attributes["due_date"]).replace(
             hour=DIGEST_TIME.hour, minute=DIGEST_TIME.minute, tzinfo=JST) - timedelta(days=7)
