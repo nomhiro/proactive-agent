@@ -1005,3 +1005,24 @@ Expected: すべて PASS
 git add core/src/vehicle_core/scenarios.py core/tests/test_scenarios.py README.md
 git commit -m "feat(core): デモのシナリオ定義とコアの通しテストを追加"
 ```
+
+---
+
+## 実装時の決定（実装後に追記）
+
+実装中と最終レビューで決めたこと。Plan 2〜4 はこれを前提にする。
+
+- `analyze_impact` の `touches_safety` は、影響を受けるものに加えて起点そのものも見る（安全要求そのものの変更も「安全要求に関わる」）
+- `is_quiet` は日をまたがない時間帯（例: 12:00〜13:00）も扱う
+- `route_test_run` は存在しないテスト ID でも例外を出さない（持ち主チームなしとして、見張りに合うチームにだけ出す）
+- シードの `SPEC-BRK-04` の説明には誤字（「目標原則度」）があり、シナリオ s0 で直す
+- `decide_delivery` は `silent` を安全要求の判定より先に見る（誤字の修正は安全要求の近くでも届けない）
+- 連続失敗の見張りは、遅れて届いた古い結果では鳴らない。`Watch.streak` は 1 以上
+- `authorize_agent_write(caller_team, container, doc, lookup_message, *, lookup_thread, now)`:
+  - `lookup_thread(thread_id) -> list[AgentMail]` と `now` は必須。`escalation` は `needs_escalation` が真のときだけ通す
+  - `human_reply` の `body` は元の発言の `text` と同じでなければならない（`stance` はエージェントの解釈）
+  - 提案は `pending` で、`decided_by` と `decided_at` が空のものだけ通す（承認と却下は BFF が人の操作で書く）
+  - アシスタントの発言の `author` は `ASSISTANT_AUTHOR`（`"agent"`）だけ。`created_at` は窓口の `now` で置き換える
+- **Plan 2 への申し送り**: 窓口の Function は、`authorize_agent_write` が返したモデルを保存する（生の `doc` ではなく）。保存は新規作成のみで、既存の ID を上書きしない
+- **後の計画で扱う**: Notification の分類が下限以上か、`highlight_ids` が `analyze_impact` と一致するかは、Plan 3 のツール設計で担保する（通知の中身はコードが作り、LLM は分類と文面だけを渡す）
+- **残した軽微な点**: UTC の変更イベントから作る `not_before` が UTC のまま（比較は正しい）、`Proposal` の `kind` と `to_teams` に制約がない（人の承認を経る）、`DIGEST_TIME` が全チーム共通
