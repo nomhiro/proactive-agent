@@ -13,7 +13,8 @@ from pydantic import AwareDatetime
 from vehicle_core.clock import to_jst
 from vehicle_core.routing import InvestigationRequest, coalesce
 
-from .store import Conflict, Store
+from .docs import parse_each
+from .store import Conflict, NotFound, Store
 
 CONTAINER = "investigations"
 log = logging.getLogger(__name__)
@@ -65,30 +66,39 @@ def _members(merged: InvestigationRequest, records: list[dict]) -> list[dict]:
 def dispatch_due(store: Store, invoker: AgentInvoker, now: datetime) -> list[str]:
     now = to_jst(now)
     stamp = now.isoformat()
-    records = store.query(CONTAINER, {"status": "pending"})
-    requests = [InvestigationRequest.model_validate(r) for r in records]
+    parsed = parse_each(store.query(CONTAINER, {"status": "pending"}), InvestigationRequest)
+    records = [d for d, _ in parsed]
+    requests = [r for _, r in parsed]
     dispatched = []
     for merged in coalesce(requests):
         if merged.not_before > now:
             continue
         members = _members(merged, records)
-        single = len(members) == 1 and members[0]["id"] == merged.id
-        claimed = []
-        try:
-            for m in members:
-                update = ({"status": "dispatched", "dispatched_at": stamp} if single
-                          else {"status": "merged", "merged_into": merged.id})
-                claimed.append(store.replace(CONTAINER, m | update, etag=m["_etag"]))
-        except Conflict:
-            # 別の tick が先に確保した
-            log.info("investigation claim lost: %s", merged.id)
-            continue
-        if not single:
+        if len(members) == 1 and members[0]["id"] == merged.id:
+            # 1件だけ: 元の記録を etag 付きで書き換えて確保する
+            m = members[0]
+            try:
+                store.replace(CONTAINER, m | {"status": "dispatched", "dispatched_at": stamp}, etag=m["_etag"])
+            except (Conflict, NotFound):
+                log.info("investigation claim lost: %s", merged.id)
+                continue
+        else:
+            # 複数をまとめた: まとめた記録の新規作成を確保とする（先に作れた tick だけが渡す）。
+            # 元の記録の印付けは、勝ち負けに関係なく後から行う（途中で止まっても取りこぼさない）
             record = InvestigationRecord(**merged.model_dump(), status="dispatched", dispatched_at=now)
             try:
                 store.create(CONTAINER, record.model_dump(mode="json"))
+                won = True
             except Conflict:
-                pass
+                won = False
+            for m in members:
+                try:
+                    store.replace(CONTAINER, m | {"status": "merged", "merged_into": merged.id}, etag=m["_etag"])
+                except (Conflict, NotFound):
+                    pass
+            if not won:
+                log.info("investigation claim lost: %s", merged.id)
+                continue
         try:
             invoker.invoke(merged)
         except Exception as e:  # noqa: BLE001 — 受け渡しの失敗は記録して次へ進む

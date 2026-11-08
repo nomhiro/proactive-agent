@@ -87,3 +87,22 @@ def test_mail_to_team_without_agent_is_ignored():
     mail = AgentMail(id="am-3", thread_id="th-2", from_team="integrated_control", to_team="battery_control",
                      kind="impact_notice", body="x", created_at=datetime(2026, 11, 18, 8, 5, tzinfo=JST))
     assert mail_request(mail) is None
+
+
+# --- 最終レビューの指摘1: 保存済みの壊れた文書で、以後の処理が止まらない ---
+
+def test_malformed_artifact_does_not_block_routing(store):
+    store.create("artifacts", {"id": "BAD", "vehicle_id": "kakuu-suv", "type": "nonsense"})
+    assert len(handle_change_events([S1], store)) == 1
+
+
+def test_malformed_watch_does_not_block_routing(store):
+    store.create("watches", {"id": "w-bad", "vehicle_id": "kakuu-suv", "kind": "nonsense"})
+    assert len(handle_change_events([S1], store)) == 1
+
+
+def test_malformed_earlier_run_does_not_block_feature(store):
+    store.create("test_runs", {"id": "run-bad", "vehicle_id": "kakuu-suv", "feature": "regen_coord", "result": "maybe"})
+    doc = SCENARIOS["s2_hils_streak"].steps[0].test_run.model_dump(mode="json")
+    store.create("test_runs", doc)
+    assert len(handle_test_runs([doc], store)) == 1

@@ -1,52 +1,35 @@
 """変更フィードの処理: 変更イベント、試験結果、エージェント間メールから調査依頼を作る。
 
 - シード投入・リセットの文書（origin == "seed"）は飛ばす
-- 形の壊れた文書はログに残して飛ばし、同じバッチの残りは処理する
-  （例外を出すと、同じバッチが永久に再試行される）
+- 形の壊れた文書はログに残して飛ばし、同じバッチの残りは処理する。保存済みの文書
+  （artifacts、watches、試験結果の履歴）も同じく、壊れたものだけ飛ばす
+- Cosmos のトリガーは、既定では例外の出たバッチを再試行せずに読み飛ばす。一時的な失敗で
+  バッチを失わないよう、function_app.py で再試行の設定を付けている（処理は冪等なので安全）
 """
 
-import logging
-from collections.abc import Iterable
-from typing import TypeVar
-
-from pydantic import BaseModel, ValidationError
 from vehicle_core.constants import AGENT_TEAMS
 from vehicle_core.impact import Graph
 from vehicle_core.models import AgentMail, Artifact, ChangeEvent, Classification, MailKind, TestRun, Watch
 from vehicle_core.routing import InvestigationRequest, idempotency_key, route_change, route_test_run
 
+from .docs import models
 from .investigations import enqueue
 from .store import Store
-
-log = logging.getLogger(__name__)
-M = TypeVar("M", bound=BaseModel)
 
 # 人の承認を経た連絡と、判断の依頼は、人に届けるべきもの（計画の決定6）
 _MAIL_FLOOR = {MailKind.IMPACT_NOTICE: Classification.NOTIFY_NOW, MailKind.ESCALATION: Classification.NOTIFY_NOW}
 
 
-def _valid(docs: Iterable[dict], model: type[M]) -> list[M]:
-    out = []
-    for d in docs:
-        if d.get("origin") == "seed":
-            continue
-        try:
-            out.append(model.model_validate(d))
-        except ValidationError as e:
-            log.warning("skip invalid %s doc id=%s errors=%d", model.__name__, d.get("id"), e.error_count())
-    return out
-
-
 def load_graph(store: Store) -> Graph:
-    return Graph.from_artifacts(Artifact.model_validate(d) for d in store.query("artifacts"))
+    return Graph.from_artifacts(models(store.query("artifacts"), Artifact))
 
 
 def _watches(store: Store) -> list[Watch]:
-    return [Watch.model_validate(d) for d in store.query("watches")]
+    return models(store.query("watches"), Watch)
 
 
 def handle_change_events(docs: list[dict], store: Store) -> list[str]:
-    events = _valid(docs, ChangeEvent)
+    events = models(docs, ChangeEvent, skip_seed=True)
     if not events:
         return []
     graph, watches = load_graph(store), _watches(store)
@@ -54,14 +37,14 @@ def handle_change_events(docs: list[dict], store: Store) -> list[str]:
 
 
 def handle_test_runs(docs: list[dict], store: Store) -> list[str]:
-    runs = _valid(docs, TestRun)
+    runs = models(docs, TestRun, skip_seed=True)
     if not runs:
         return []
     graph, watches = load_graph(store), _watches(store)
     created = []
     for run in runs:
-        history = [TestRun.model_validate(d) for d in store.query("test_runs", {"feature": run.feature})
-                   if d["id"] != run.id]
+        history = [r for r in models(store.query("test_runs", {"feature": run.feature}), TestRun)
+                   if r.id != run.id]
         created += enqueue(store, route_test_run(run, history, graph, watches))
     return created
 
@@ -83,5 +66,5 @@ def mail_request(mail: AgentMail) -> InvestigationRequest | None:
 
 
 def handle_agent_mail(docs: list[dict], store: Store) -> list[str]:
-    requests = [r for m in _valid(docs, AgentMail) if (r := mail_request(m)) is not None]
+    requests = [r for m in models(docs, AgentMail, skip_seed=True) if (r := mail_request(m)) is not None]
     return enqueue(store, requests)

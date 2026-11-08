@@ -74,3 +74,16 @@ def test_invoker_failure_is_recorded():
     assert dispatch_due(store, RecordingInvoker(fail=True), T0) == []
     rec = store.get("investigations", "k1")
     assert rec["status"] == "failed" and rec["error"]
+
+
+
+def test_merged_group_already_claimed_by_other_tick_is_skipped():  # 最終レビューの指摘3
+    from vehicle_core.routing import coalesce
+    store, inv = MemoryStore(), RecordingInvoker()
+    reqs = [req("k1", "ce-1", T0), req("k2", "ce-2", T0 + timedelta(seconds=60))]
+    enqueue(store, reqs)
+    [merged] = coalesce(reqs)
+    store.create("investigations", {"id": merged.id, "vehicle_id": "kakuu-suv", "status": "dispatched"})
+    assert dispatch_due(store, inv, T0 + timedelta(seconds=60)) == []
+    assert inv.calls == []
+    assert {store.get("investigations", k)["status"] for k in ("k1", "k2")} == {"merged"}

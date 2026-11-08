@@ -27,3 +27,14 @@ def test_load_settings_reads_audiences_list():
                        "AGENT_INVOKER": "log"})
     assert s.gateway_audiences == ["a", "api://t/b"]
     assert s.agent_invoker == "log"
+
+
+
+def test_change_feed_functions_have_retry_policy():  # 最終レビューの指摘1: 例外でバッチを失わない
+    import function_app
+    importlib.reload(function_app)
+    cosmos = [f for f in function_app.app.get_functions() if f.get_trigger().get_binding_name() == "cosmosDBTrigger"]
+    assert len(cosmos) == 9
+    for f in cosmos:
+        policy = f.get_settings_dict("retry_policy")
+        assert policy and policy["strategy"] == "exponential_backoff", f.get_function_name()

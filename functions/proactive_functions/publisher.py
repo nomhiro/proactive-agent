@@ -13,6 +13,7 @@ from vehicle_core.constants import Team
 from .store import Store
 
 PUBLISHED_CONTAINERS = ("messages", "proposals", "agent_runs", "notifications", "watches")
+_TEAMS = frozenset(t.value for t in Team)
 
 
 class Publisher(Protocol):
@@ -43,7 +44,7 @@ def _held(container: str, doc: dict, store: Store) -> bool:
 def publish_changes(container: str, docs: list[dict], store: Store, publisher: Publisher) -> int:
     sent = 0
     for doc in docs:
-        if doc.get("origin") == "seed" or not doc.get("team") or _held(container, doc, store):
+        if doc.get("origin") == "seed" or doc.get("team") not in _TEAMS or _held(container, doc, store):
             continue
         publisher.publish(doc["team"], refresh_event(container, doc["id"], doc["team"]))
         sent += 1

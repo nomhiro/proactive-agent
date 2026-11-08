@@ -62,3 +62,10 @@ def test_webpubsub_publisher_sends_to_team_group(monkeypatch):
     WebPubSubPublisher("https://x.webpubsub.azure.com", "proactive", object()).publish(
         Team.EVALUATION, {"type": "refresh"})
     assert sent == [("evaluation", {"type": "refresh"}, "application/json")]
+
+
+
+def test_unknown_team_is_not_published():  # 最終レビューの指摘1
+    store, pub = MemoryStore(), RecordingPublisher()
+    doc = {"id": "w1", "vehicle_id": "kakuu-suv", "team": "nonsense"}
+    assert publish_changes("watches", [doc], store, pub) == 0

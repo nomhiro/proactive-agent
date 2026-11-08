@@ -967,4 +967,10 @@ def test_load_settings_reads_audiences_list():
 - tick の `overdue_thread_ids` には、その回に新しく起こしたスレッドだけを入れる
 - `notification_id` が存在しない通知を指すメッセージは、画面への合図を送らない（届けていない通知とみなす）
 - `uv sync --all-packages` のあとで `proactive_functions` が import できないときは、`uv sync --all-packages --reinstall-package proactive-functions` で直る（パッケージのディレクトリが空のうちに同期したため）
+- **最終レビューで直したこと**:
+  - Review Focus 5 の前提が逆だった。Cosmos のトリガーは例外の出たバッチを「永久に再試行」するのではなく、既定では再試行せずに読み飛ばす（そのバッチは失われる）。Cosmos のトリガー 9 個すべてに再試行の設定（指数バックオフ、最大 5 回、5 秒〜5 分）を付けた。処理はどれも冪等なので安全
+  - 保存済みの壊れた文書（artifacts、watches、試験結果の履歴、通知、予定、メール、調査依頼）が1件あると、振り分けや tick が止まっていた。1件ずつ検証して、壊れたものだけ飛ばす（`proactive_functions/docs.py`）。チーム名が壊れた文書は画面に合図を送らない
+  - 複数をまとめた調査依頼は、まとめた記録の新規作成を「確保」とする。元の記録の印付けは後から行う（途中で止まったり、二つの tick が別の順で確保したりしても、依頼を失わない）
+  - 定時の仕事は、実行済みの印を付ける前に、依頼と次の回を作る（途中で止まっても毎日の予定が途切れない）
+- **Plan 3 への申し送り（追加）**: 書き込み窓口のサービスプリンシパルに `appRoleAssignmentRequired: true` を付け、エージェント ID にだけアプリロールを割り当てると、窓口宛てのトークンを取れるアプリを絞れる（client ID の対応表に加える多層の防御）
 - 2026-11-08 に `proactive-dev`（japaneast）へデプロイし、`scripts/smoke.py` と、本物の Cosmos での Store の契約テストが通った

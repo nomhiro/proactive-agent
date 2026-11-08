@@ -18,6 +18,10 @@ app = func.FunctionApp()
 
 COSMOS = dict(connection="COSMOS", database_name="%COSMOS_DATABASE%", lease_container_name="leases",
               create_lease_container_if_not_exists=False)
+# Cosmos のトリガーは、既定では例外の出たバッチを再試行せずに読み飛ばす（そのバッチは失われる）。
+# 処理はどれも冪等なので、一時的な失敗は再試行で取り戻す
+RETRY = dict(strategy="exponential_backoff", max_retry_count="5", minimum_interval="00:00:05",
+             maximum_interval="00:05:00")
 
 
 @functools.cache
@@ -81,21 +85,25 @@ def agent_write(req: func.HttpRequest) -> func.HttpResponse:
 
 # --- 変更フィード ---------------------------------------------------------
 
+@app.retry(**RETRY)
 @app.cosmos_db_trigger(arg_name="docs", container_name="change_events", lease_container_prefix="route-ce-", **COSMOS)
 def route_change_events(docs: func.DocumentList) -> None:
     handle_change_events(_docs(docs), _deps().store)
 
 
+@app.retry(**RETRY)
 @app.cosmos_db_trigger(arg_name="docs", container_name="test_runs", lease_container_prefix="route-tr-", **COSMOS)
 def route_test_runs(docs: func.DocumentList) -> None:
     handle_test_runs(_docs(docs), _deps().store)
 
 
+@app.retry(**RETRY)
 @app.cosmos_db_trigger(arg_name="docs", container_name="agent_mail", lease_container_prefix="mail-", **COSMOS)
 def deliver_agent_mail(docs: func.DocumentList) -> None:
     handle_agent_mail(_docs(docs), _deps().store)
 
 
+@app.retry(**RETRY)
 @app.cosmos_db_trigger(arg_name="docs", container_name="system", lease_container_prefix="tick-", **COSMOS)
 def tick_on_clock(docs: func.DocumentList) -> None:
     _tick()
@@ -110,7 +118,7 @@ def _register_publisher(container: str) -> None:
     publish.__name__ = publish.__qualname__ = name
     trigger = app.cosmos_db_trigger(arg_name="docs", container_name=container,
                                     lease_container_prefix=f"pub-{container}-", **COSMOS)
-    app.function_name(name=name)(trigger(publish))
+    app.function_name(name=name)(app.retry(**RETRY)(trigger(publish)))
 
 
 for _container in PUBLISHED_CONTAINERS:

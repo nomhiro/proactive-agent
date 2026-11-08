@@ -92,3 +92,31 @@ def test_tick_with_earlier_clock_changes_nothing():
     assert rep == TickReport(delivered_notification_ids=[], ran_schedule_ids=[], overdue_thread_ids=[],
                              dispatched_ids=[])
     assert store.get("notifications", "n1")["delivered_at"] is not None
+
+
+
+# --- 最終レビューの指摘2: 壊れた文書が1件あっても tick は止まらない ---
+
+def test_malformed_notification_does_not_stop_tick():
+    store = seeded_schedules()
+    store.create("notifications", {"id": "n-bad", "vehicle_id": "kakuu-suv", "classification": "nonsense"})
+    store.create("schedules", {"id": "s-bad", "vehicle_id": "kakuu-suv", "due_at": "not a date"})
+    store.create("agent_mail", {"id": "am-bad", "vehicle_id": "kakuu-suv", "kind": "impact_notice"})
+    rep = tick(store, MORNING)
+    assert "sch-digest-integrated_control-20261118" in rep.ran_schedule_ids
+
+
+# --- 最終レビューの指摘4: 実行済みの印を付ける前に、次の回と依頼を作る ---
+
+def test_follow_up_exists_even_if_marking_done_fails():
+    import pytest
+    store = seeded_schedules()
+
+    def fail_on_schedules(container, doc):
+        if container == "schedules":
+            raise RuntimeError("インスタンスが止まった")
+    store.before_replace = fail_on_schedules
+    with pytest.raises(RuntimeError):
+        tick(store, MORNING)
+    assert store.get("schedules", "sch-digest-integrated_control-20261119") is not None or         store.get("schedules", "sch-digest-motor_control-20261119") is not None or         store.get("schedules", "sch-briefing-chief_engineer-20261119") is not None or         store.get("schedules", "sch-digest-evaluation-20261119") is not None
+    assert store.query("investigations", {"trigger": "schedule"}) != []

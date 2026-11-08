@@ -17,7 +17,8 @@ from vehicle_core.routing import InvestigationRequest, idempotency_key
 
 from .investigations import AgentInvoker, dispatch_due, enqueue
 from .publisher import Publisher, refresh_event
-from .store import Conflict, Store
+from .docs import models, parse_each
+from .store import Conflict, NotFound, Store
 
 
 class TickReport(BaseModel):
@@ -39,13 +40,12 @@ def run_tick(store: Store, invoker: AgentInvoker, publisher: Publisher, now: dat
 
 def _deliver(store: Store, publisher: Publisher, now: datetime) -> list[str]:
     delivered = []
-    for doc in store.query("notifications", {"delivered_at": None}):
-        n = Notification.model_validate(doc)
+    for doc, n in parse_each(store.query("notifications", {"delivered_at": None}), Notification):
         if n.deliver_at is None or n.deliver_at > now:
             continue
         try:
             store.replace("notifications", doc | {"delivered_at": now.isoformat()}, etag=doc["_etag"])
-        except Conflict:
+        except (Conflict, NotFound):
             continue  # 別の tick が届けた
         publisher.publish(n.team, refresh_event("notifications", n.id, n.team.value))
         delivered.append(n.id)
@@ -60,14 +60,11 @@ def next_occurrence(due: datetime, now: datetime) -> datetime:
 
 def _run_schedules(store: Store, now: datetime) -> list[str]:
     ran = []
-    for doc in store.query("schedules", {"done_at": None}):
-        s = Schedule.model_validate(doc)
+    for doc, s in parse_each(store.query("schedules", {"done_at": None}), Schedule):
         if s.due_at > now:
             continue
-        try:
-            store.replace("schedules", doc | {"done_at": now.isoformat()}, etag=doc["_etag"])
-        except Conflict:
-            continue  # 別の tick が実行した
+        # 実行済みの印より先に、依頼と次の回を作る（途中で止まっても毎日の予定が途切れない）。
+        # どちらも決まった ID の新規作成なので、二度実行しても1件にとどまる
         enqueue(store, [InvestigationRequest(
             id=idempotency_key(s.team, "schedule", [s.id]), team=s.team, trigger="schedule",
             origin_artifact_id=None, source_ids=[s.id], impact=None, matched_watch_ids=[],
@@ -81,19 +78,23 @@ def _run_schedules(store: Store, now: datetime) -> list[str]:
                 store.create("schedules", follow.model_dump(mode="json"))
             except Conflict:
                 pass
+        try:
+            store.replace("schedules", doc | {"done_at": now.isoformat()}, etag=doc["_etag"])
+        except (Conflict, NotFound):
+            continue  # 別の tick が実行した
         ran.append(s.id)
     return ran
 
 
 def _overdue_replies(store: Store, now: datetime) -> list[str]:
-    notices = sorted((AgentMail.model_validate(d) for d in store.query("agent_mail", {"kind": MailKind.IMPACT_NOTICE.value})),
+    notices = sorted(models(store.query("agent_mail", {"kind": MailKind.IMPACT_NOTICE.value}), AgentMail),
                      key=lambda m: m.created_at)
     first_by_thread: dict[str, AgentMail] = {}
     for m in notices:
         first_by_thread.setdefault(m.thread_id, m)
     overdue = []
     for thread_id, first in first_by_thread.items():
-        thread = [AgentMail.model_validate(d) for d in store.query("agent_mail", {"thread_id": thread_id})]
+        thread = models(store.query("agent_mail", {"thread_id": thread_id}), AgentMail)
         decision = needs_escalation(thread, now)
         if not (decision.escalate and decision.reason == "no_reply"):
             continue
