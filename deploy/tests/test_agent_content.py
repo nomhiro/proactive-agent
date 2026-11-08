@@ -98,3 +98,10 @@ def test_routines_close_the_run_from_begin_morning_digest():
     text = read(AGENTS / "routines.md")
     for s in re.split(r"^## ", text, flags=re.M)[1:]:
         assert "`start_run`" not in s and "`finish_run`" in s and "run_id" in s
+
+
+def test_team_instructions_answer_a2a_questions_in_text():
+    # 統括から A2A で尋ねられたら、道具を最小限にして文章で答える（返事が空になった、M10 の確認）
+    for t in ["integrated_control", "motor_control", "evaluation"]:
+        text = read(AGENTS / "instructions" / f"{t}.md")
+        assert "## 統括から尋ねられたとき" in text and "文章で答える" in text, t
