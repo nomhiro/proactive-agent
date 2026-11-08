@@ -127,6 +127,8 @@ class TeamSettings(BaseModel):
     quiet_start: time = QUIET_START
     quiet_end: time = QUIET_END
     members: list[Person] = []
+    # このチームのアシスタント（エージェント ID）の client ID。書き込み窓口が呼び出し元のチームを決めるのに使う
+    agent_client_id: str | None = None
 
 
 class MailKind(StrEnum):
@@ -212,6 +214,8 @@ class Notification(BaseModel):
     deliver_at: AwareDatetime | None
     reason: str
     created_at: AwareDatetime
+    # 画面に届けた時刻。窓口か tick が付ける（エージェントは付けられない）
+    delivered_at: AwareDatetime | None = None
 
 
 class AgentRun(BaseModel):
@@ -232,6 +236,8 @@ class Schedule(BaseModel):
     due_at: AwareDatetime
     task: str
     payload: dict[str, Any] = {}
+    # 実行した時刻。tick が付ける（エージェントは付けられない）
+    done_at: AwareDatetime | None = None
 
 
 CONTAINER_MODELS: dict[str, type[BaseModel]] = {

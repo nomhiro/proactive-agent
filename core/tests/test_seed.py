@@ -1,5 +1,7 @@
-from vehicle_core.constants import Team
-from vehicle_core.seed import SEED_NOW, build_dataset
+from datetime import datetime
+
+from vehicle_core.constants import JST, Team
+from vehicle_core.seed import SEED_NOW, build_dataset, build_schedules
 
 
 def test_build_dataset_is_deterministic():
@@ -39,3 +41,16 @@ def test_no_real_company_names(dataset):
     banned = ["トヨタ", "ホンダ", "日産", "Toyota", "Honda", "Nissan", "Denso", "デンソー"]
     text = dataset.model_dump_json()
     assert not any(b in text for b in banned)
+
+
+def test_build_schedules_daily_and_release_check(dataset):
+    sch = {s.id: s for s in build_schedules(dataset)}
+    assert len(sch) == 5
+    d = sch["sch-digest-integrated_control-20261118"]
+    assert d.due_at == datetime(2026, 11, 18, 8, 0, tzinfo=JST) and d.payload["recur"] == "daily"
+    assert d.payload["series"] == "sch-digest-integrated_control"
+    assert sch["sch-briefing-chief_engineer-20261118"].task == "morning_briefing"
+    gap = sch["sch-release-gap-R3"]
+    assert gap.team == Team.CHIEF_ENGINEER and gap.due_at == datetime(2026, 11, 23, 8, 0, tzinfo=JST)
+    assert gap.payload == {"release_id": "R3"}
+    assert all(s.done_at is None for s in sch.values())

@@ -184,3 +184,19 @@ def test_watch_with_zero_streak_denied():
              feature="regen_coord", streak=0, delivery="immediate", created_by="tanaka", created_at=T)
     with pytest.raises(WriteDenied):
         aw("integrated_control", "watches", w, lookup)
+
+
+def test_agent_cannot_mark_notification_delivered():
+    doc = dict(id="n9", team="integrated_control", origin_artifact_id="SIG-BrkPedalPos", impacted_ids=[],
+               highlight_ids=[], cross_team_edges=[], classification="notify_now", deliver_at=T,
+               delivered_at=T, reason="r", created_at=T)
+    with pytest.raises(WriteDenied):
+        aw("integrated_control", "notifications", doc, lookup)
+    assert aw("integrated_control", "notifications", doc | {"delivered_at": None}, lookup).id == "n9"
+
+
+def test_agent_cannot_mark_schedule_done():
+    doc = dict(id="s1", team="integrated_control", due_at=T, task="recheck", done_at=T)
+    with pytest.raises(WriteDenied):
+        aw("integrated_control", "schedules", doc, lookup)
+    assert aw("integrated_control", "schedules", doc | {"done_at": None}, lookup).id == "s1"

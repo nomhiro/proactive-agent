@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from vehicle_core.constants import AGENT_TEAMS, JST, Team
-from vehicle_core.models import Artifact, ChangeEvent, FieldChange
+from vehicle_core.models import Artifact, ChangeEvent, FieldChange, TeamSettings
 
 
 def test_change_event_editorial_only_is_not_substantive():
@@ -37,3 +37,7 @@ def test_artifact_json_roundtrip_keeps_vehicle_id():
 
 def test_agent_teams_are_exactly_four():
     assert AGENT_TEAMS == {Team.CHIEF_ENGINEER, Team.INTEGRATED_CONTROL, Team.MOTOR_CONTROL, Team.EVALUATION}
+
+
+def test_team_settings_agent_client_id_defaults_to_none():
+    assert TeamSettings(id="ts-x", team="evaluation").agent_client_id is None
