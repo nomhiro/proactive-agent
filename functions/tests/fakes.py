@@ -81,3 +81,13 @@ class RecordingPublisher:
 
     def publish(self, team, event: dict) -> None:
         self.events.append((team, event))
+
+
+class FakeVerifier:
+    """「Bearer <client_id>」の client_id をそのまま返す。"""
+
+    def verify(self, authorization):
+        from proactive_functions.auth import AuthError
+        if not authorization or not authorization.startswith("Bearer "):
+            raise AuthError("トークンがありません")
+        return authorization.removeprefix("Bearer ")

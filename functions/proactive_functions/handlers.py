@@ -37,7 +37,7 @@ def _valid(docs: Iterable[dict], model: type[M]) -> list[M]:
     return out
 
 
-def _graph(store: Store) -> Graph:
+def load_graph(store: Store) -> Graph:
     return Graph.from_artifacts(Artifact.model_validate(d) for d in store.query("artifacts"))
 
 
@@ -49,7 +49,7 @@ def handle_change_events(docs: list[dict], store: Store) -> list[str]:
     events = _valid(docs, ChangeEvent)
     if not events:
         return []
-    graph, watches = _graph(store), _watches(store)
+    graph, watches = load_graph(store), _watches(store)
     return enqueue(store, [r for ev in events for r in route_change(ev, graph, watches)])
 
 
@@ -57,7 +57,7 @@ def handle_test_runs(docs: list[dict], store: Store) -> list[str]:
     runs = _valid(docs, TestRun)
     if not runs:
         return []
-    graph, watches = _graph(store), _watches(store)
+    graph, watches = load_graph(store), _watches(store)
     created = []
     for run in runs:
         history = [TestRun.model_validate(d) for d in store.query("test_runs", {"feature": run.feature})
