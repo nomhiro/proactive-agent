@@ -29,3 +29,12 @@ def test_set_virtual_now_overwrites_previous_offset():
     set_virtual_now(store, datetime(2026, 11, 18, 8, 0, tzinfo=JST), real.now())
     assert StoredClock(store, real).now() == datetime(2026, 11, 18, 8, 0, tzinfo=JST)
     assert store.get("system", "clock")["vehicle_id"] == "kakuu-suv"
+
+
+def test_stored_clock_read_returns_now_and_offset_together():  # tick の朝の Routines の判定に使う（Plan 3 決定 17）
+    store = MemoryStore()
+    real = VirtualClock(datetime(2026, 11, 8, 12, 0, tzinfo=JST))
+    set_virtual_now(store, datetime(2026, 11, 8, 13, 0, tzinfo=JST), real.now())
+    now, offset = StoredClock(store, real).read()
+    assert now == datetime(2026, 11, 8, 13, 0, tzinfo=JST) and offset == 3600.0
+    assert StoredClock(MemoryStore(), real).read() == (real.now(), 0.0)

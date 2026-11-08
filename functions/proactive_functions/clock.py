@@ -20,9 +20,13 @@ class StoredClock:
         self._system = system or SystemClock()
 
     def now(self) -> datetime:
+        return self.read()[0]
+
+    def read(self) -> tuple[datetime, float]:
+        """いまの仮想の時刻と、ずれ（秒）を、同じ文書から読む。"""
         doc = self._store.get(CLOCK_CONTAINER, CLOCK_ID)
         offset = float(doc["offset_seconds"]) if doc else 0.0
-        return to_jst(self._system.now() + timedelta(seconds=offset))
+        return to_jst(self._system.now() + timedelta(seconds=offset)), offset
 
 
 def set_virtual_now(store: Store, target: datetime, system_now: datetime) -> None:

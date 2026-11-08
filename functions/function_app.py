@@ -31,7 +31,6 @@ def _deps() -> SimpleNamespace:
     from proactive_functions.auth import EntraTokenVerifier
     from proactive_functions.blobs import AzureBlobs
     from proactive_functions.clock import StoredClock
-    from proactive_functions.investigations import LoggingInvoker
     from proactive_functions.mcp.server import build_registry
     from proactive_functions.publisher import WebPubSubPublisher
     from proactive_functions.settings import load_settings
@@ -40,16 +39,36 @@ def _deps() -> SimpleNamespace:
     s = load_settings()
     credential = DefaultAzureCredential()
     store = CosmosStore(s.cosmos_endpoint, s.cosmos_database, credential)
+    clock = StoredClock(store)
+    invoker, routines = _agents(s, credential, store, clock)
     return SimpleNamespace(
         store=store,
-        clock=StoredClock(store),
-        invoker=LoggingInvoker(),
+        clock=clock,
+        invoker=invoker,
+        routines=routines,
         publisher=WebPubSubPublisher(s.webpubsub_endpoint, s.webpubsub_hub, credential),
         verifier=EntraTokenVerifier(s.gateway_tenant_id, s.gateway_audiences),
         registry=build_registry(),
         blobs=AzureBlobs(s.blob_endpoint, credential) if s.blob_endpoint else None,
         memory=_memory_backend(s, credential),
     )
+
+
+def _agents(s, credential, store, clock):
+    """AGENT_INVOKER で受け渡しを切り替える。foundry なら、朝の Routines の手動起動も行う。"""
+    from proactive_functions.investigations import LoggingInvoker
+    if s.agent_invoker != "foundry":
+        return LoggingInvoker(), None
+    from vehicle_core.constants import agent_name
+
+    from proactive_functions.foundry_invoker import FoundryInvoker, FoundryResponsesClient, FoundryRoutineDispatcher
+
+    @functools.cache
+    def client_for(team):
+        return FoundryResponsesClient(s.foundry_project_endpoint, credential, agent_name(team))
+
+    return (FoundryInvoker(store, client_for, clock.now),
+            FoundryRoutineDispatcher(s.foundry_project_endpoint, credential))
 
 
 def _memory_backend(s, credential):
@@ -69,7 +88,8 @@ def _docs(docs: func.DocumentList) -> list[dict]:
 def _tick() -> None:
     from proactive_functions.tick import run_tick
     d = _deps()
-    run_tick(d.store, d.invoker, d.publisher, d.clock.now())
+    now, offset = d.clock.read()
+    run_tick(d.store, d.invoker, d.publisher, now, routines=d.routines, offset_seconds=offset)
 
 
 # --- HTTP ---------------------------------------------------------------
