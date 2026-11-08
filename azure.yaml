@@ -1,0 +1,14 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+name: proactive-agent
+metadata:
+  template: proactive-agent
+services:
+  functions:
+    project: ./functions
+    language: python
+    host: function
+    hooks:
+      prepackage:
+        run: uv run python ../scripts/package_functions.py prepare
+      postpackage:
+        run: uv run python ../scripts/package_functions.py cleanup

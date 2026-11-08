@@ -1,0 +1,30 @@
+[project]
+name = "proactive-functions"
+version = "0.1.0"
+description = "プロアクティブエージェントの Azure Functions（振り分け、まとめ、定時実行、メール配達、書き込み窓口、画面への通知）"
+requires-python = ">=3.12"
+dependencies = [
+    "azure-functions>=1.21",
+    "azure-cosmos>=4.9",
+    "azure-identity>=1.19",
+    "azure-messaging-webpubsubservice>=1.2",
+    "pyjwt[crypto]>=2.9",
+    "vehicle-core",
+]
+
+[tool.uv.sources]
+vehicle-core = { workspace = true }
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["proactive_functions"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
