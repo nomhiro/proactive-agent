@@ -20,6 +20,7 @@ from ..auth import AuthError, TokenVerifier
 from . import protocol
 from .context import ToolContext
 from .protocol import Registry, Tool, handle_rpc
+from .write_tools import register_write_tools
 
 log = logging.getLogger(__name__)
 
@@ -48,6 +49,7 @@ def build_registry() -> Registry:
         input_schema={"type": "object", "properties": {}, "additionalProperties": False},
         handler=_get_now,
     ))
+    register_write_tools(reg)
     return reg
 
 
