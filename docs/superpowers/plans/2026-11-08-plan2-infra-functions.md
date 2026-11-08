@@ -954,3 +954,17 @@ def test_load_settings_reads_audiences_list():
 - **変更イベントを書く側**（Plan 4）: シナリオ再生は `change_events` に書くと同時に、`artifacts` の該当データも変更後の値に更新する（Functions は `artifacts` を書き換えない）。仮想時計は `system/clock` の `offset_seconds` を書けば、Functions の tick が動く
 - **画面への通知**（Plan 4）: Web PubSub のグループ名はチームの値。合図は `{"type": "refresh", "kind", "id", "team"}` だけなので、画面は合図を受けたら BFF から読み直す。配達前の通知とそれにひもづくメッセージは、BFF も画面に出さない（`delivered_at` が空なら出さない）
 - **人の承認の実行**（Plan 4）: BFF は `impact_notice` を `agent_mail` に書き、`proposals` の `status`・`decided_by`・`decided_at` を更新する。BFF の ID には Cosmos の Data Contributor を付ける
+
+---
+
+## 実装時の決定（実装後に追記）
+
+実装中と最終レビューで決めたこと。Plan 3 と Plan 4 はこれを前提にする。
+
+- Functions のマネージド ID は `infra/modules/identity.bicep` に分けた（Cosmos と Web PubSub の権限を、Functions のモジュールより先に付けるため）
+- 初回の `azd up` は、プロビジョニングと並行して始まる発行がタグ付きのリソースを見つけられずに失敗することがある。`azd deploy` だけをやり直せば通る（README に記載）
+- `scripts/_azd.py` に、azd の環境の値の読み取りと `CosmosStore` の用意をまとめた（seed、clock、smoke の3つで使う）
+- tick の `overdue_thread_ids` には、その回に新しく起こしたスレッドだけを入れる
+- `notification_id` が存在しない通知を指すメッセージは、画面への合図を送らない（届けていない通知とみなす）
+- `uv sync --all-packages` のあとで `proactive_functions` が import できないときは、`uv sync --all-packages --reinstall-package proactive-functions` で直る（パッケージのディレクトリが空のうちに同期したため）
+- 2026-11-08 に `proactive-dev`（japaneast）へデプロイし、`scripts/smoke.py` と、本物の Cosmos での Store の契約テストが通った
