@@ -16,7 +16,7 @@ def test_all_functions_registered_without_touching_azure(monkeypatch):
     import function_app
     importlib.reload(function_app)
     names = {f.get_function_name() for f in function_app.app.get_functions()}
-    assert names == {"health", "agent_write", "route_change_events", "route_test_runs", "deliver_agent_mail",
+    assert names == {"health", "mcp", "route_change_events", "route_test_runs", "deliver_agent_mail",
                      "tick_on_clock", "tick_timer", "publish_messages", "publish_proposals", "publish_agent_runs",
                      "publish_notifications", "publish_watches"}
 

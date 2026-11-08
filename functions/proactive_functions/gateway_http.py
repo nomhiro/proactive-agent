@@ -16,6 +16,7 @@ from vehicle_core.impact import analyze_impact
 from vehicle_core.models import AgentMail, Message, Notification, TeamSettings
 from vehicle_core.notify_policy import decide_delivery
 
+from .agent_writes import team_for_client
 from .auth import AuthError, TokenVerifier
 from .handlers import load_graph
 from .store import Conflict, Store
@@ -28,11 +29,6 @@ class HttpResult(BaseModel):
 
 def _reason(status: int, reason: str) -> HttpResult:
     return HttpResult(status=status, body={"reason": reason})
-
-
-def team_for_client(store: Store, client_id: str) -> str | None:
-    found = store.query("team_settings", {"agent_client_id": client_id})
-    return found[0]["team"] if found else None
 
 
 def _settings(store: Store, team: str) -> TeamSettings:

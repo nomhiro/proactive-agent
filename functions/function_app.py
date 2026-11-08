@@ -31,6 +31,7 @@ def _deps() -> SimpleNamespace:
     from proactive_functions.auth import EntraTokenVerifier
     from proactive_functions.clock import StoredClock
     from proactive_functions.investigations import LoggingInvoker
+    from proactive_functions.mcp.server import build_registry
     from proactive_functions.publisher import WebPubSubPublisher
     from proactive_functions.settings import load_settings
     from proactive_functions.store import CosmosStore
@@ -44,6 +45,7 @@ def _deps() -> SimpleNamespace:
         invoker=LoggingInvoker(),
         publisher=WebPubSubPublisher(s.webpubsub_endpoint, s.webpubsub_hub, credential),
         verifier=EntraTokenVerifier(s.gateway_tenant_id, s.gateway_audiences),
+        registry=build_registry(),
     )
 
 
@@ -69,15 +71,16 @@ def health(req: func.HttpRequest) -> func.HttpResponse:
     return _health()
 
 
-@app.route(route="agent/{container}/{item_id?}", methods=["POST", "PUT", "DELETE"],
-           auth_level=func.AuthLevel.ANONYMOUS)
-def agent_write(req: func.HttpRequest) -> func.HttpResponse:
-    from proactive_functions.gateway_http import handle_agent_write
+@app.route(route="mcp", methods=["GET", "POST", "DELETE"], auth_level=func.AuthLevel.ANONYMOUS)
+def mcp(req: func.HttpRequest) -> func.HttpResponse:
+    from proactive_functions.mcp.context import ToolContext
+    from proactive_functions.mcp.server import handle_mcp_http
     d = _deps()
-    result = handle_agent_write(
-        req.method, req.route_params.get("container", ""), req.route_params.get("item_id"),
-        req.headers.get("Authorization"), req.get_body(),
-        store=d.store, verifier=d.verifier, now=d.clock.now(),
+    now = d.clock.now()
+    result = handle_mcp_http(
+        req.method, req.headers.get("Authorization"), req.get_body(),
+        verifier=d.verifier, store=d.store, registry=d.registry,
+        make_ctx=lambda team: ToolContext(team=team, store=d.store, now=now),
     )
     body = json.dumps(result.body, ensure_ascii=False) if result.body is not None else None
     return func.HttpResponse(body, status_code=result.status, mimetype="application/json")
