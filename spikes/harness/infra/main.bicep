@@ -87,6 +87,8 @@ output AZURE_TENANT_ID string = tenant().tenantId
 output AZURE_RESOURCE_GROUP string = rg.name
 output FOUNDRY_PROJECT_ENDPOINT string = foundry.outputs.projectEndpoint
 output FOUNDRY_PROJECT_ID string = foundry.outputs.projectId
+// azd ai connection create が、エンドポイントだけでは購読と RG を引けないため
+output AZURE_AI_PROJECT_ID string = foundry.outputs.projectId
 output MODEL_DEPLOYMENT string = foundry.outputs.modelDeployment
 output FUNCTION_APP_NAME string = functions.outputs.name
 output MCP_URL string = '${functions.outputs.url}/api/mcp'

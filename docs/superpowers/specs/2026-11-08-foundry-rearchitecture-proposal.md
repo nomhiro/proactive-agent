@@ -223,6 +223,25 @@ Routines は実時間の cron で動く。デモは「翌朝」「7日前」を�
 
 spike の結果、2 か 6 が成り立たない場合は、D1 を B（ホステッド）に戻すことを提案する。
 
+### 9.1 結果（2026-11-08、環境 `proactive-spike`、Japan East、モデル gpt-5.4-mini）
+
+環境とスクリプトは [spikes/harness](../../../spikes/harness/README.md)。エージェントは SDK（`azure-ai-projects` 2.10.0、`PromptAgentDefinition(harness=MicrosoftCopilotHarness())`）で作った。
+
+| 番号 | 結果 | わかったこと |
+|---|---|---|
+| 2 | **成り立つ** | MCP サーバーに届いたトークンは v2.0。`aud` はアプリ登録の app ID（GUID。`api://…` の URI ではない）。`azp` / `oid` / `sub` はどれもエージェントの `instance_identity`（principal_id と client_id は同じ値）で、spike-a と spike-b で値が違う。JWKS による署名と宛先の検証は、HTTP 関数で自前で行って通った。**Plan 2 の `auth.py`（`azp` を `team_settings.agent_client_id` と照らす）は、そのまま使える。** `agent_client_id` には `instance_identity.client_id` を入れる。`xms_par_app_azp`、`idtyp`、`roles` はトークンに入っていなかった。そのため「エージェントからの呼び出しか」はクレームでは判定できず、許可は `azp` の対応表だけが根拠になる（Plan 2 の考え方と同じ）。MCP の要求には `mcp-method`、`mcp-name`、`mcp-protocol-version` のヘッダーが付き、エージェント名のヘッダーはない |
+| 6 | **成り立つ** | harness 付きエージェントは `background=True` を受け付けた（受け付けた直後は `in_progress`、ポーリングで `completed`）。Functions のマネージド ID（プロジェクトに Foundry User）からも、キューで起動して完了まで確かめた。かかった時間は 10〜25 秒 |
+| 3 | **条件付きで成り立つ** | 作業環境は Python 3.13.17 で、numpy は最初は入っていない。シェルで `pip install numpy scipy matplotlib` を実行すると、既定のネットワーク設定のまま入った（numpy 2.5.4、scipy 1.18.1、matplotlib 3.11.2、20 秒ほど）。作業環境は会話ごとに別なので、解析のたびに入れ直す。RAI ポリシーで外向きの通信を絞る場合は、PyPI のホストを許可に入れる。Code Interpreter で代える必要はない |
+| 1 | 一部だけ | Japan East で harness 付きエージェントを作り、gpt-5.4-mini で動いた。ただし azd の `azure.ai.agent` サービスではなく SDK で作ったので、azd での定義は Plan 3 の最初に確かめる。`azd ai connection create` は、azd の環境に `AZURE_AI_PROJECT_ID` がないと失敗する |
+| 4、5、7、8 | 未実施 | Plan 3 で順に確かめる |
+
+そのほかに見えたこと:
+
+- エージェントの `agent_endpoint.authorization_schemes` は、既定で `Entra` だった。Routines は Entra（AzureRbac）の方式を求めるので、既定のまま使えるとみられる（7 で確かめる）
+- エージェントを作ると、エージェントごとに別のブループリント（`blueprint.client_id`）もできた
+
+**結論: 2 と 6 が成り立ったので、D1 は A（harness）で進める。D4 も A（作業環境で pip install）でよい。**
+
 ---
 
 ## 10. 承認後の進め方
