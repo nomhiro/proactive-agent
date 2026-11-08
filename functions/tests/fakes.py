@@ -8,11 +8,18 @@ from proactive_functions.store import Conflict, NotFound
 
 
 class MemoryStore:
-    """Store の偽物。`_etag` は書くたびに変わる。"""
+    """Store の偽物。`_etag` は書くたびに変わる。
+
+    競合を作るためのつまみ: before_replace（置き換えの直前に呼ぶ）と touch（etag だけ変える）。
+    """
 
     def __init__(self) -> None:
         self._data: dict[str, dict[str, dict]] = {}
         self._seq = itertools.count(1)
+        self.before_replace = None
+
+    def touch(self, container: str, id: str) -> None:
+        self._put(container, self._box(container)[id])
 
     def _box(self, container: str) -> dict[str, dict]:
         return self._data.setdefault(container, {})
@@ -37,6 +44,8 @@ class MemoryStore:
         return self._put(container, doc)
 
     def replace(self, container: str, doc: dict, *, etag: str) -> dict:
+        if self.before_replace:
+            self.before_replace(container, doc)
         cur = self._box(container).get(doc["id"])
         if cur is None:
             raise NotFound(doc["id"])
@@ -52,3 +61,15 @@ class MemoryStore:
         def match(d: dict) -> bool:
             return all((d.get(k) is None) if v is None else d.get(k) == v for k, v in (where or {}).items())
         return [copy.deepcopy(d) for d in self._box(container).values() if match(d)]
+
+
+
+class RecordingInvoker:
+    def __init__(self, fail: bool = False) -> None:
+        self.calls = []
+        self.fail = fail
+
+    def invoke(self, request) -> None:
+        if self.fail:
+            raise RuntimeError("エージェントを起動できませんでした")
+        self.calls.append(request)
