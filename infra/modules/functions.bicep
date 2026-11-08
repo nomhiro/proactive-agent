@@ -16,6 +16,11 @@ param webPubSubHub string
 param gatewayTenantId string
 @description('書き込み窓口が受け付けるトークンの aud（カンマ区切り）')
 param gatewayAudiences string
+@description('HILS ログを読む Blob のエンドポイント')
+param blobEndpoint string
+@description('エージェントの起動、Routines の手動起動、Memory ストアに使う Foundry のプロジェクト')
+param foundryProjectEndpoint string
+param memoryStoreName string
 
 resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {
   name: storageAccountName
@@ -106,7 +111,10 @@ resource app 'Microsoft.Web/sites@2024-04-01' = {
         { name: 'WEBPUBSUB_HUB', value: webPubSubHub }
         { name: 'GATEWAY_TENANT_ID', value: gatewayTenantId }
         { name: 'GATEWAY_AUDIENCES', value: gatewayAudiences }
-        { name: 'AGENT_INVOKER', value: 'log' }
+        { name: 'AGENT_INVOKER', value: 'foundry' }
+        { name: 'FOUNDRY_PROJECT_ENDPOINT', value: foundryProjectEndpoint }
+        { name: 'MEMORY_STORE_NAME', value: memoryStoreName }
+        { name: 'AZURE_STORAGE_BLOB_ENDPOINT', value: blobEndpoint }
         { name: 'AZURE_CLIENT_ID', value: identityClientId }
         { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsightsConnectionString }
         { name: 'APPLICATIONINSIGHTS_AUTHENTICATION_STRING', value: 'ClientId=${identityClientId};Authorization=AAD' }
