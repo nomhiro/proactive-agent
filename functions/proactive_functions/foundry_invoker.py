@@ -167,6 +167,19 @@ class FoundryRoutineDispatcher:
         self._project.beta.routines.dispatch(routine_name=routine_name(team))
 
 
+def _last_tick_doc(now: datetime, offset_seconds: float) -> dict:
+    return {"id": LAST_TICK_ID, "vehicle_id": VEHICLE_ID, "at": to_jst(now).isoformat(),
+            "offset_seconds": offset_seconds}
+
+
+def record_clock_baseline(store: Store, now: datetime, offset_seconds: float) -> None:
+    """時計を合わせ直したとき（シードの作り直し）に、朝の判定の基準を今のずれにする。
+
+    作り直しは「時計を動かすこと」ではないので、ここで基準を書いておかないと、直後に朝へ進めても起動が抜ける。
+    """
+    store.upsert(LAST_TICK_CONTAINER, _last_tick_doc(now, offset_seconds))
+
+
 def morning_dispatch_due(store: Store, now: datetime, offset_seconds: float) -> bool:
     """時計が動かされて朝 8:00 を越えたときだけ真。
 
@@ -176,7 +189,7 @@ def morning_dispatch_due(store: Store, now: datetime, offset_seconds: float) -> 
     """
     now = to_jst(now)
     doc = store.get(LAST_TICK_CONTAINER, LAST_TICK_ID)
-    fresh = {"id": LAST_TICK_ID, "vehicle_id": VEHICLE_ID, "at": now.isoformat(), "offset_seconds": offset_seconds}
+    fresh = _last_tick_doc(now, offset_seconds)
     if doc is None:
         try:
             store.create(LAST_TICK_CONTAINER, fresh)

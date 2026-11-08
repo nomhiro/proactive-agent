@@ -71,3 +71,15 @@ def test_seed_uploads_scenario_logs():
     n = upload_hils_logs(writer, scenario_log_blobs())
     assert n == len(writer.files) >= 3
     assert {f"hils-logs/TC-HILS-031/s2-{i}.csv" for i in (1, 2, 3)} <= writer.files.keys()
+
+
+def test_reset_records_clock_baseline_for_morning_dispatch():  # 最終レビューの I1
+    # シードの作り直しは「時計を動かすこと」ではない。直後に朝へ進めたら Routines を起動する
+    from proactive_functions.foundry_invoker import morning_dispatch_due
+    store = MemoryStore()
+    real = datetime(2026, 11, 8, 12, 0, tzinfo=JST)
+    seed_store(store, reset=True, system_now=real)
+    offset = store.get("system", "clock")["offset_seconds"]
+    assert store.get("system", "last_tick")["offset_seconds"] == offset
+    target = datetime(2026, 11, 18, 8, 0, tzinfo=JST)
+    assert morning_dispatch_due(store, target, (target - real).total_seconds()) is True

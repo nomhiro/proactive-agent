@@ -109,11 +109,12 @@ def mcp(req: func.HttpRequest) -> func.HttpResponse:
     from proactive_functions.mcp.context import ToolContext
     from proactive_functions.mcp.server import handle_mcp_http
     d = _deps()
-    now = d.clock.now()
     result = handle_mcp_http(
         req.method, req.headers.get("Authorization"), req.get_body(),
         verifier=d.verifier, store=d.store, registry=d.registry,
-        make_ctx=lambda team: ToolContext(team=team, store=d.store, now=now, blobs=d.blobs, memory=d.memory),
+        # 時計は認証を通ってから読む
+        make_ctx=lambda team: ToolContext(team=team, store=d.store, now=d.clock.now(), blobs=d.blobs,
+                                          memory=d.memory),
     )
     body = json.dumps(result.body, ensure_ascii=False) if result.body is not None else None
     return func.HttpResponse(body, status_code=result.status, mimetype="application/json")

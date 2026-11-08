@@ -172,3 +172,26 @@ def test_begin_morning_digest_once_per_virtual_day(store):
     assert call(store, "begin_morning_digest", {}, now=morning + timedelta(days=1))["already_done"] is False
     # ほかのチームは別に数える
     assert call(store, "begin_morning_digest", {}, team=MC, now=morning)["already_done"] is False
+
+
+def test_begin_morning_digest_outside_morning_window_does_nothing(store):  # 最終レビューの I3
+    # 実時間の cron が仮想の夜中に起動しても、まとめを作らず、朝の本来のまとめを塞がない
+    night = datetime(2026, 11, 18, 4, 0, tzinfo=JST)
+    res = call(store, "begin_morning_digest", {}, now=night)
+    assert res["already_done"] is True and res["not_morning"] is True
+    assert store.get("agent_runs", "run-morning-integrated_control-20261118") is None
+    morning = datetime(2026, 11, 18, 8, 0, tzinfo=JST)
+    assert call(store, "begin_morning_digest", {}, now=morning)["already_done"] is False
+    assert call(store, "begin_morning_digest", {}, now=datetime(2026, 11, 18, 12, 0, tzinfo=JST))["not_morning"]
+
+
+def test_begin_morning_digest_takes_over_stale_running_digest(store):  # 最終レビューの I4
+    # 1回目の応答が途中で失敗して running のまま残っても、15 分たてば次の起動が引き継ぐ
+    morning = datetime(2026, 11, 18, 8, 0, tzinfo=JST)
+    run_id = call(store, "begin_morning_digest", {}, now=morning)["run_id"]
+    assert call(store, "begin_morning_digest", {}, now=morning + timedelta(minutes=5)) == {"already_done": True}
+    retry = call(store, "begin_morning_digest", {}, now=morning + timedelta(minutes=20))
+    assert retry == {"already_done": False, "run_id": run_id}
+    assert store.get("agent_runs", run_id)["started_at"].startswith("2026-11-18T08:20")
+    call(store, "finish_run", {"run_id": run_id, "summary": "s"}, now=morning + timedelta(minutes=21))
+    assert call(store, "begin_morning_digest", {}, now=morning + timedelta(minutes=60)) == {"already_done": True}

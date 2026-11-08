@@ -54,6 +54,8 @@ def seed_store(store: Store, *, reset: bool, system_now: datetime) -> dict[str, 
 
     if reset or store.get(CLOCK_CONTAINER, CLOCK_ID) is None:
         set_virtual_now(store, SEED_NOW, system_now)
+        from .foundry_invoker import record_clock_baseline
+        record_clock_baseline(store, SEED_NOW, store.get(CLOCK_CONTAINER, CLOCK_ID)["offset_seconds"])
     return counts
 
 

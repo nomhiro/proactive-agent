@@ -698,6 +698,7 @@ def test_routine_specs_use_tokyo_8am_and_stable_names(): ...   # 決定 16 が r
 - **ロール**: Cognitive Services OpenAI User はアカウントのスコープで付ける（プロジェクトのスコープでは埋め込みが 401）。プロジェクトとアカウントのマネージド ID にも、アカウントのスコープで Foundry User と OpenAI User を付ける
 - **フックの順番**: RAI ポリシーはエージェントより先に作る（定義の `rai_config` が参照する）。統括の A2A の道具は相手ごとに1つ（接続 `a2a-<エージェント名>`）
 - **モデルの容量**: 500（50 万トークン/分）にした。50 のままだと、朝 8:00 に4体が同時に動いたときに3体の応答が `rate_limit_exceeded` で失敗し、`run-morning-…` が running のまま残った。Azure Monitor の ModelRequests には 429 が出ず、自分の会話から4体に同時に送って応答の `error` を見て突き止めた
+- **最終レビューで直したこと**: シードを作り直すときに朝の判定の基準（`last_tick`）も書く。トークンのない MCP の呼び出しは本文を読む前に 401 にし、深い入れ子の JSON は -32700 にする。`begin_morning_digest` は仮想の時刻が朝（8:00〜11:59）のときだけ通し、running のまま 15 分たった朝のまとめは次の起動が引き継ぐ。時計を動かさずに仮想の 8:00 を迎えても朝のまとめは出ない（実時間の cron と仮想の時計がずれているため。デモでは時計を進める）
 - **設定**: `MEMORY_BACKEND` は足していない（Memory ストアだけ）。`AZURE_STORAGE_BLOB_ENDPOINT` がなければ `get_test_log` は「ログがありません」を返す
 
 ### Plan 4 への申し送り
@@ -706,5 +707,4 @@ def test_routine_specs_use_tokyo_8am_and_stable_names(): ...   # 決定 16 が r
 - **チャットの会話 ID**: チームに1本。`team_settings` に `chat_conversation_id` を足して持つのが簡単（シードの作り直しで `agent_client_id` と同じく引き継ぐ）
 - **グラフの取得**: `foundry-file:<ID>` の ID を、**プロジェクトの** OpenAI クライアント（`project.get_openai_client().files.content(<ID>)`）で取る。エージェントのエンドポイント用のクライアントでは 404 になる
 - **Memory ストアの読み方**: `project.beta.memory_stores.list_memories(name=MEMORY_STORE_NAME, scope=<チームの値>)`。画面の「覚えていること」には、これと `watches` を並べる
-- **失敗した応答の作業記録**: Routines から起動した応答が失敗すると、`begin_morning_digest` が作った作業記録は running のまま残り、その日のまとめは「済み」の扱いになる。tick の片付けは `response_id` を持つ記録だけを見るので、これは閉じない。画面で「いま」に残り続けるのを避けるなら、`response_id` のない running の記録を一定時間で閉じる処理を足す
 - **朝の schedule の指示文**: `functions/proactive_functions/prompts.py` の朝の行は、`begin_morning_digest` が作る作業記録を閉じるように書いていない。朝のまとめを `schedules` から起動するようにするなら直す

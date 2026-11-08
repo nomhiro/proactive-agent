@@ -111,3 +111,15 @@ def call_get_now(now):
 def test_get_now_uses_virtual_clock_and_quiet_hours():
     assert call_get_now(NIGHT) == {"now": "2026-11-17T21:10:00+09:00", "date": "2026-11-17", "in_quiet_hours": True}
     assert call_get_now(DAY)["in_quiet_hours"] is False
+
+
+def test_http_deeply_nested_json_is_parse_error_not_500():  # 最終レビューの I2
+    res, reg = post(b"[" * 200_000)
+    assert res.status == 200 and res.body["error"]["code"] == -32700 and reg.calls == []
+
+
+def test_http_without_token_is_rejected_before_reading_body():  # 最終レビューの I2
+    made = []
+    res = handle_mcp_http("POST", None, b"[" * 200_000, verifier=FakeVerifier(), store=store_with_mapping(),
+                          registry=CountingRegistry(), make_ctx=lambda team: made.append(team))
+    assert res.status == 401 and made == []

@@ -5,10 +5,12 @@ id、team、vehicle_id、created_at、author、role はサーバーが決める�
 """
 
 import uuid
+from datetime import time, timedelta
 from typing import Any
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict
-from vehicle_core.constants import Team
+from vehicle_core.clock import to_jst
+from vehicle_core.constants import DIGEST_TIME, Team
 from vehicle_core.impact import analyze_impact
 from vehicle_core.models import (
     AgentMail, AgentRun, Classification, DeliveryMode, MailKind, Message, MessageRole, Notification, Proposal,
@@ -154,17 +156,35 @@ def finish_run(ctx: ToolContext, args: dict) -> dict:
     return {"run_id": a.run_id}
 
 
+MORNING_WINDOW_END = time(12, 0)
+STALE_DIGEST_AFTER = timedelta(minutes=15)
+
+
 def begin_morning_digest(ctx: ToolContext, args: dict) -> dict:
-    """朝のまとめを1日1回に限る（Plan 3 決定 9）。仮想の日付とチームで決まる ID を新規作成できたら始めてよい。"""
-    run_id = f"run-morning-{ctx.team.value}-{ctx.now:%Y%m%d}"
+    """朝のまとめを1日1回に限る（Plan 3 決定 9）。仮想の日付とチームで決まる ID を新規作成できたら始めてよい。
+
+    - 仮想の時刻が朝（8:00〜11:59）でなければ作らない。実時間の cron は仮想の時計と関係なく毎朝起動するので、
+      仮想の夜中にまとめを作って、その日の本来のまとめを塞がないようにする
+    - 前の起動が途中で失敗して running のまま 15 分たっていれば、引き継いでやり直す
+    """
+    now = to_jst(ctx.now)
+    if not (DIGEST_TIME <= now.time() < MORNING_WINDOW_END):
+        return {"already_done": True, "not_morning": True}
+    run_id = f"run-morning-{ctx.team.value}-{now:%Y%m%d}"
     title = "朝のブリーフィング" if ctx.team == Team.CHIEF_ENGINEER else "朝のまとめ"
-    run = AgentRun(id=run_id, team=ctx.team, state="running", title=title, started_at=ctx.now)
+    run = AgentRun(id=run_id, team=ctx.team, state="running", title=title, started_at=now)
     try:
-        create_doc(ctx.store, ctx.team.value, "agent_runs", run.model_dump(mode="json"), ctx.now)
+        create_doc(ctx.store, ctx.team.value, "agent_runs", run.model_dump(mode="json"), now)
     except WriteRejected as e:
-        if e.status == 409:
+        if e.status != 409:
+            raise ToolError(e.reason) from None
+        existing = ctx.store.get("agent_runs", run_id)
+        if not existing or existing.get("state") != "running"                 or now - to_jst(AgentRun.model_validate(existing).started_at) < STALE_DIGEST_AFTER:
             return {"already_done": True}
-        raise ToolError(e.reason) from None
+        try:
+            replace_run(ctx.store, ctx.team.value, run_id, run.model_dump(mode="json"), now)
+        except WriteRejected:
+            return {"already_done": True}  # 別の起動が先に引き継いだ
     return {"already_done": False, "run_id": run_id}
 
 
@@ -246,7 +266,7 @@ TOOLS = [
     Tool("finish_run", "作業記録を「完了」にする。summary に結論と判断の理由を書く。調査の依頼で渡された run_id にも使う。",
          _schema({"run_id": _S, "summary": _S, "detail": _OBJ}, ["run_id", "summary"]), finish_run),
     Tool("begin_morning_digest", "朝のまとめ（統括は朝のブリーフィング）を始める前に必ず呼ぶ。already_done が true なら、"
-         "今日の分は済んでいるので何もせずに終える。", _schema({}, []), begin_morning_digest),
+         "今日の分は済んでいるか、朝（8:00〜11:59）ではないので、何もせずに終える。", _schema({}, []), begin_morning_digest),
     Tool("add_watch", "見張りを足す。kind は artifact_changed（target_ids の変更）か test_failure_streak（feature の試験が streak 回続けて失敗）。"
          "delivery は immediate（すぐ）か digest（朝のまとめ）。requested_by は頼んだ人の ID。",
          _schema({"kind": {"type": "string", "enum": [k.value for k in WatchKind]}, "description": _S,

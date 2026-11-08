@@ -70,6 +70,10 @@ def handle_mcp_http(
     if method.upper() != "POST":  # SSE の待ち受けとセッションの削除は使わない
         return McpHttpResult(status=405)
 
+    if not authorization and protocol.DISCOVERY_REQUIRES_TOKEN:
+        # どの要求にもトークンが要るので、本文を読む前に断る（トークンのない呼び出し元に解析の負荷をかけさせない）
+        return McpHttpResult(status=401, body={"reason": "Bearer トークンがありません"})
+
     team: Team | None = None
     if authorization:
         try:
@@ -84,7 +88,7 @@ def handle_mcp_http(
 
     try:
         msg = json.loads(body or b"null")
-    except (ValueError, UnicodeDecodeError):
+    except (ValueError, UnicodeDecodeError, RecursionError):  # RecursionError は深すぎる入れ子
         return McpHttpResult(status=200, body=protocol._err(None, -32700, "本文が JSON ではありません"))
 
     messages = msg if isinstance(msg, list) else [msg]
