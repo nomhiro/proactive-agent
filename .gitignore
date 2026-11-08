@@ -23,3 +23,7 @@ local.settings.json
 Thumbs.db
 .vscode/
 .idea/
+
+# Functions のデプロイ用に生成するもの（scripts/package_functions.py）
+functions/vehicle_core/
+functions/requirements.txt

@@ -12,7 +12,9 @@ from pydantic import BaseModel, ValidationError
 from .clock import to_jst
 from .constants import AGENT_TEAMS, VEHICLE_ID, Team
 from .escalation import needs_escalation
-from .models import CONTAINER_MODELS, AgentMail, MailKind, Message, MessageRole, Proposal, ProposalStatus
+from .models import (
+    CONTAINER_MODELS, AgentMail, MailKind, Message, MessageRole, Notification, Proposal, ProposalStatus, Schedule,
+)
 
 # アシスタントの発言の author。人の ID を名乗らせない
 ASSISTANT_AUTHOR = "agent"
@@ -76,6 +78,10 @@ def authorize_agent_write(
             model.status != ProposalStatus.PENDING or model.decided_by is not None or model.decided_at is not None
         ):
             raise WriteDenied("提案の承認や却下は人が行います")
+        if (isinstance(model, Notification) and model.delivered_at is not None) or (
+            isinstance(model, Schedule) and model.done_at is not None
+        ):
+            raise WriteDenied("配達済みや完了済みの印はコードが付けます")
     if "created_at" in type(model).model_fields:
         model = model.model_copy(update={"created_at": now})
     return model
