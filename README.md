@@ -20,6 +20,7 @@
 uv sync --all-packages
 uv run --directory core pytest
 uv run --directory functions pytest
+uv run --package proactive-deploy pytest deploy/tests
 ```
 
 ## Azure へのデプロイ
@@ -39,7 +40,20 @@ azd env new proactive-dev --location japaneast
 azd up
 ```
 
-`azd up` はリソースを作り、Functions をデプロイし、最後にデモのデータ（シード）を Cosmos DB に入れます。
+`azd up` は次の順に進みます。
+
+1. Bicep でリソースを作る（Foundry のアカウント、プロジェクト、モデルのデプロイを含む）
+2. デモのデータ（シード）を Cosmos DB に入れる（`postprovision`）
+3. Functions（MCP サーバーを含む）をデプロイする
+4. `postdeploy` のフック（`deploy/proactive_deploy/setup.py`）が、Bicep では作れないものを作る。MCP 接続、RAI ポリシー（外への通信は PyPI だけ）、スキル4つ、エージェント4体、エージェント ID へのロール、`team_settings.agent_client_id`、Memory ストア、朝の Routines の順です。何度実行してもかまいません
+
+エージェントの定義は、フックの Python スクリプトから SDK で作ります。azd の `azure.ai.agent` サービスでも harness、MCP の道具、スキルを宣言できますが、指示文をチームごとのファイルから読みたいことと、ロールや Routines のためにフックがどのみち要ることから、SDK にしています（設計書 7.10 節）。
+
+フックだけをやり直すときは、次のコマンドを実行します。
+
+```bash
+uv run --package proactive-deploy python -m proactive_deploy.setup
+```
 
 初回の `azd up` が「`azd-service-name: functions` のタグが付いたリソースが見つからない」というエラーで止まることがあります。azd がプロビジョニングと並行して発行を始めるためです。リソースはできているので、`azd deploy` だけをもう一度実行してください。
 
