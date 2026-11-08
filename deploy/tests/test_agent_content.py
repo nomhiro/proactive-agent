@@ -91,3 +91,10 @@ def test_regen_model_reproduces_scenario_delay():
     from regen_model import step_delay_ms
     delta = step_delay_ms(20) - step_delay_ms(10)
     assert 12 <= delta <= 18  # 設計書 7.6 節: 約 15ms
+
+
+def test_routines_close_the_run_from_begin_morning_digest():
+    # begin_morning_digest が作業記録（run-morning-…）を作るので、別の start_run で始めない
+    text = read(AGENTS / "routines.md")
+    for s in re.split(r"^## ", text, flags=re.M)[1:]:
+        assert "`start_run`" not in s and "`finish_run`" in s and "run_id" in s
