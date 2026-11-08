@@ -16,6 +16,8 @@ param principalId string = ''
 @description('エージェントが使うモデル（Foundry のデプロイ名も同じ）')
 param modelName string = 'gpt-5.4-mini'
 param modelVersion string = '2026-03-17'
+@description('モデルのレートの上限（1000 トークン/分）。GlobalStandard は使った分だけの課金で、容量に固定費はかからない')
+param modelCapacity int = 500
 
 @description('チームの記憶を置く Foundry Memory の Memory ストアの名前。ストアはフックが作る')
 param memoryStoreName string = 'team-memory'
@@ -88,6 +90,7 @@ module foundry 'modules/foundry.bicep' = {
     functionPrincipalId: identity.outputs.principalId
     modelName: modelName
     modelVersion: modelVersion
+    modelCapacity: modelCapacity
   }
 }
 

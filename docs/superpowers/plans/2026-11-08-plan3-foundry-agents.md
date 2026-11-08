@@ -667,3 +667,44 @@ def test_routine_specs_use_tokyo_8am_and_stable_names(): ...   # 決定 16 が r
   - エージェントを作り直したとき、フックが対応表とロールを合わせ直すこと
 - [ ] **Step 4: 実装時の決定を追記する** — 本書の末尾に「実装時の決定」を足す（Task 1 の決定の表、実装中に決めたこと、Plan 4 への申し送り: BFF の ID に Foundry User、チャットの会話 ID の置き場所、グラフの取得方法、Memory ストアの読み方）
 - [ ] **Step 5: Commit** — `git commit -m "docs: Plan 3 のデプロイ手順と確認を README に追記し、スモークテストを足す"`
+
+---
+
+## 実装時の決定
+
+### Task 1 の決定の表
+
+| 決定 | 結果 |
+|---|---|
+| 2 発見のトークン | `DISCOVERY_REQUIRES_TOKEN = True`（Foundry は `server/discover` を含むすべての呼び出しにトークンを付けた） |
+| 13 記憶 | `foundry`（Memory ストア。scope はチームの値） |
+| 14 グラフ | `foundry-files`（`upload_file_from_workspace_to_foundry_project` → `foundry-file:<ID>`） |
+| 15 尋ねる | `a2a` |
+| 16 Routines | `routines`（会話は指定しない。`schedules` は `release_gap_check` だけ） |
+| 17 手動起動 | Functions の ID（プロジェクトの Foundry User）で起動できた。追加のロールは要らない |
+| エージェントの定義 | `sdk`（azd でもできるが、設計書 7.10 節の理由で SDK） |
+| RAI の Network ルール | Japan East で使えた。PyPI だけを許可 |
+| harness の道具 | `MicrosoftCopilotToolsetPreview` でファイルの読み書きとシェルだけにした |
+
+### 実装中に決めたこと
+
+- **記憶**: 項目の削除は ID だけで通るので、`FoundryMemoryBackend.delete` はその scope の一覧に ID があるかを先に確かめる。`MemoryItem.created_at` は省略できる
+- **調査の起動**: 応答を受け付けた後の記録（`investigations` の ID、`agent_runs`）が失敗しても例外にしない。例外にすると、起動済みの調査を `dispatch_due` が `failed` と書いてしまう
+- **時計を進めたときの Routines**: `last_tick` はずれが変わったときだけ書く。毎回書くと、`system` コンテナーの変更フィードで tick がもう一度起き、止まらなくなる。動かす直前の仮想の時刻は「今回の時刻 −（今回のずれ − 前回のずれ）」で求める
+- **Routines の手動起動**: `AGENT_INVOKER=foundry` のときだけ行う
+- **回生協調の簡易モデル**: 「次の送信まで待つ + 1周期後に使う」の輸送遅れと、時定数 8ms の一次遅れ。50% に達するまでの時間を周期内の位置で平均する。10ms で 20.8ms、20ms で 36.0ms、差は 15.2ms
+- **モデルのコードの渡し方**: スキルの `inline_content` は説明と本文だけなので、フックが `analysis` スキルの本文の末尾に `regen_model.py` をコードブロックとして付ける
+- **朝のまとめの作業記録**: `begin_morning_digest` が作る `run-morning-…` を、`finish_run` で閉じる（`start_run` で別の記録を始めない）
+- **ロール**: Cognitive Services OpenAI User はアカウントのスコープで付ける（プロジェクトのスコープでは埋め込みが 401）。プロジェクトとアカウントのマネージド ID にも、アカウントのスコープで Foundry User と OpenAI User を付ける
+- **フックの順番**: RAI ポリシーはエージェントより先に作る（定義の `rai_config` が参照する）。統括の A2A の道具は相手ごとに1つ（接続 `a2a-<エージェント名>`）
+- **モデルの容量**: 500（50 万トークン/分）にした。50 のままだと、朝 8:00 に4体が同時に動いたときに3体の応答が `rate_limit_exceeded` で失敗し、`run-morning-…` が running のまま残った。Azure Monitor の ModelRequests には 429 が出ず、自分の会話から4体に同時に送って応答の `error` を見て突き止めた
+- **設定**: `MEMORY_BACKEND` は足していない（Memory ストアだけ）。`AZURE_STORAGE_BLOB_ENDPOINT` がなければ `get_test_log` は「ログがありません」を返す
+
+### Plan 4 への申し送り
+
+- **BFF の ID**: プロジェクトの Foundry User を付ける（チャットの送信、Foundry Files のグラフの取得）。Memory ストアを読むなら、アカウントのスコープで Cognitive Services OpenAI User も付ける
+- **チャットの会話 ID**: チームに1本。`team_settings` に `chat_conversation_id` を足して持つのが簡単（シードの作り直しで `agent_client_id` と同じく引き継ぐ）
+- **グラフの取得**: `foundry-file:<ID>` の ID を、**プロジェクトの** OpenAI クライアント（`project.get_openai_client().files.content(<ID>)`）で取る。エージェントのエンドポイント用のクライアントでは 404 になる
+- **Memory ストアの読み方**: `project.beta.memory_stores.list_memories(name=MEMORY_STORE_NAME, scope=<チームの値>)`。画面の「覚えていること」には、これと `watches` を並べる
+- **失敗した応答の作業記録**: Routines から起動した応答が失敗すると、`begin_morning_digest` が作った作業記録は running のまま残り、その日のまとめは「済み」の扱いになる。tick の片付けは `response_id` を持つ記録だけを見るので、これは閉じない。画面で「いま」に残り続けるのを避けるなら、`response_id` のない running の記録を一定時間で閉じる処理を足す
+- **朝の schedule の指示文**: `functions/proactive_functions/prompts.py` の朝の行は、`begin_morning_digest` が作る作業記録を閉じるように書いていない。朝のまとめを `schedules` から起動するようにするなら直す

@@ -9,7 +9,8 @@
   4. 21:10 に s1 の変更イベントを書き、21:14 に進めると、統合制御のエージェントが調査して作業記録を閉じ、
      BrkPedalPos を起点に notify_now の通知を1件記録する。届けるのは翌朝 8:00
   5. 統合制御から、モーター制御宛ての impact_notice の下書き（承認待ち）ができる
-  6. 時計を 11/18 08:00 に進めると、朝のまとめが Routines で起動する。もう一度起動しても、まとめは増えない
+  6. 時計を 11/18 08:00 に進めると、朝のまとめが Routines で起動する（データが多いと数分かかるので上限は10分）。
+     もう一度起動しても、まとめは増えない
   7. 最後にシードを作り直して元に戻す
 
 LLM が書いた文章は判定しない。待ち合わせは5秒ごとに読み直し、上限時間で打ち切る。
@@ -136,10 +137,11 @@ def main() -> int:
     check("変更イベントから調査依頼ができる", pending is not None)
 
     set_virtual_now(store, datetime(2026, 11, 17, 21, 14, tzinfo=JST), datetime.now(JST))
+    started = time.monotonic()
     run = wait_until(lambda: (d := store.get("agent_runs", run_id)) and d.get("state") == "done" and d, timeout=600)
     current = store.get("agent_runs", run_id) or {}
     check("統合制御のエージェントが調査して作業記録を閉じる", run is not None,
-          f"(state={current.get('state')}, detail={json.dumps(current.get('detail', {}), ensure_ascii=False)[:300]})")
+          f"({round(time.monotonic() - started)} 秒, state={current.get('state')}, detail={json.dumps(current.get('detail', {}), ensure_ascii=False)[:300]})")
 
     note = s1_notification(store)
     check("BrkPedalPos を起点に notify_now の通知が1件", note is not None,
@@ -152,10 +154,12 @@ def main() -> int:
           f"(提案={[(p.get('kind'), p.get('to_teams')) for p in store.query('proposals', {'team': IC.value})]})")
 
     set_virtual_now(store, datetime(2026, 11, 18, 8, 0, tzinfo=JST), datetime.now(JST))
+    started = time.monotonic()
     morning = wait_until(lambda: (d := store.get("agent_runs", morning_id)) and d.get("state") == "done" and d,
-                         timeout=300)
+                         timeout=600)
     check("朝のまとめが起動して閉じる", morning is not None,
-          f"(state={(store.get('agent_runs', morning_id) or {}).get('state')})")
+          f"(state={(store.get('agent_runs', morning_id) or {}).get('state')}, "
+          f"{round(time.monotonic() - started)} 秒)")
 
     before = len(store.query("messages", {"team": IC.value}))
     project.beta.routines.dispatch(routine_name=f"morning-{agent_name(IC)}")

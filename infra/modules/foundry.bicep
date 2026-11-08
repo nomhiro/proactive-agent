@@ -9,7 +9,9 @@ param deployerPrincipalId string = ''
 param functionPrincipalId string
 param modelName string
 param modelVersion string
-param modelCapacity int = 50
+@description('モデルのレートの上限（1000 トークン/分）。4体が同時に動くと 50 では足りず rate_limit_exceeded になった')
+param modelCapacity int = 500
+param embeddingCapacity int = 50
 @description('Foundry Memory の索引に使う埋め込みモデル（Plan 3 決定 13）')
 param embeddingName string = 'text-embedding-3-small'
 param embeddingVersion string = '1'
@@ -41,7 +43,7 @@ resource deployment 'Microsoft.CognitiveServices/accounts/deployments@2025-06-01
 resource embedding 'Microsoft.CognitiveServices/accounts/deployments@2025-06-01' = {
   parent: account
   name: embeddingName
-  sku: { name: 'GlobalStandard', capacity: modelCapacity }
+  sku: { name: 'GlobalStandard', capacity: embeddingCapacity }
   properties: {
     model: { format: 'OpenAI', name: embeddingName, version: embeddingVersion }
   }
