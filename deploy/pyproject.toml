@@ -1,0 +1,31 @@
+[project]
+name = "proactive-deploy"
+version = "0.1.0"
+description = "azd のフック（MCP 接続、エージェント4体、ロール、対応表、Routines、RAI ポリシー）"
+requires-python = ">=3.12"
+dependencies = [
+    "azure-ai-projects>=2.10",
+    "azure-identity>=1.19",
+    "azure-mgmt-authorization>=4.0",
+    "proactive-functions",
+    "vehicle-core",
+]
+
+[tool.uv.sources]
+vehicle-core = { workspace = true }
+proactive-functions = { workspace = true }
+
+[dependency-groups]
+# numpy と scipy は agents/skills/analysis/regen_model.py の確認に使う（エージェントの作業環境では pip で入れる）
+dev = ["pytest>=8", "numpy>=2", "scipy>=1.13"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["proactive_deploy"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
