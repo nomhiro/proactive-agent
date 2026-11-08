@@ -48,7 +48,18 @@ def _deps() -> SimpleNamespace:
         verifier=EntraTokenVerifier(s.gateway_tenant_id, s.gateway_audiences),
         registry=build_registry(),
         blobs=AzureBlobs(s.blob_endpoint, credential) if s.blob_endpoint else None,
+        memory=_memory_backend(s, credential),
     )
+
+
+def _memory_backend(s, credential):
+    if not (s.foundry_project_endpoint and s.memory_store_name):
+        return None
+    from azure.ai.projects import AIProjectClient
+
+    from proactive_functions.mcp.memory import FoundryMemoryBackend
+    project = AIProjectClient(endpoint=s.foundry_project_endpoint, credential=credential, allow_preview=True)
+    return FoundryMemoryBackend(project, s.memory_store_name)
 
 
 def _docs(docs: func.DocumentList) -> list[dict]:
@@ -82,7 +93,7 @@ def mcp(req: func.HttpRequest) -> func.HttpResponse:
     result = handle_mcp_http(
         req.method, req.headers.get("Authorization"), req.get_body(),
         verifier=d.verifier, store=d.store, registry=d.registry,
-        make_ctx=lambda team: ToolContext(team=team, store=d.store, now=now, blobs=d.blobs),
+        make_ctx=lambda team: ToolContext(team=team, store=d.store, now=now, blobs=d.blobs, memory=d.memory),
     )
     body = json.dumps(result.body, ensure_ascii=False) if result.body is not None else None
     return func.HttpResponse(body, status_code=result.status, mimetype="application/json")

@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "プロアクティブエージェントの Azure Functions（振り分け、まとめ、定時実行、メール配達、書き込み窓口、画面への通知）"
 requires-python = ">=3.12"
 dependencies = [
+    "azure-ai-projects>=2.10",
     "azure-functions>=1.21",
     "azure-cosmos>=4.9",
     "azure-identity>=1.19",

@@ -17,6 +17,10 @@ class Settings(BaseModel):
     agent_invoker: Literal["log"] = "log"
     # HILS ログを読む Blob のエンドポイント。なければ get_test_log は「ログがありません」を返す
     blob_endpoint: str | None = None
+    # Foundry のプロジェクト（記憶とエージェントの起動に使う）
+    foundry_project_endpoint: str | None = None
+    # チームの記憶を置く Memory ストアの名前。なければ記憶の道具は「設定されていません」を返す
+    memory_store_name: str | None = None
 
 
 def load_settings(env: Mapping[str, str] = os.environ) -> Settings:
@@ -29,4 +33,6 @@ def load_settings(env: Mapping[str, str] = os.environ) -> Settings:
         gateway_audiences=[a.strip() for a in env["GATEWAY_AUDIENCES"].split(",") if a.strip()],
         agent_invoker=env.get("AGENT_INVOKER", "log"),
         blob_endpoint=env.get("AZURE_STORAGE_BLOB_ENDPOINT") or None,
+        foundry_project_endpoint=env.get("FOUNDRY_PROJECT_ENDPOINT") or None,
+        memory_store_name=env.get("MEMORY_STORE_NAME") or None,
     )

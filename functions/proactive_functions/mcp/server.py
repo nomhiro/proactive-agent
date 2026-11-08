@@ -20,6 +20,7 @@ from ..auth import AuthError, TokenVerifier
 from . import protocol
 from .context import ToolContext
 from .protocol import Registry, Tool, handle_rpc
+from .memory import register_memory_tools
 from .read_tools import register_read_tools
 from .write_tools import register_write_tools
 
@@ -52,6 +53,7 @@ def build_registry() -> Registry:
     ))
     register_read_tools(reg)
     register_write_tools(reg)
+    register_memory_tools(reg)
     return reg
 
 
