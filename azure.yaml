@@ -12,3 +12,6 @@ services:
         run: uv run python ../scripts/package_functions.py prepare
       postpackage:
         run: uv run python ../scripts/package_functions.py cleanup
+hooks:
+  postprovision:
+    run: uv run --package proactive-functions python scripts/seed.py
