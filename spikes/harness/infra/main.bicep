@@ -90,6 +90,7 @@ output FOUNDRY_PROJECT_ID string = foundry.outputs.projectId
 // azd ai connection create が、エンドポイントだけでは購読と RG を引けないため
 output AZURE_AI_PROJECT_ID string = foundry.outputs.projectId
 output MODEL_DEPLOYMENT string = foundry.outputs.modelDeployment
+output EMBEDDING_DEPLOYMENT string = foundry.outputs.embeddingDeployment
 output FUNCTION_APP_NAME string = functions.outputs.name
 output MCP_URL string = '${functions.outputs.url}/api/mcp'
 output MCP_AUDIENCE string = mcpApp.outputs.identifierUri

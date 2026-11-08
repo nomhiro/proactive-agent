@@ -148,7 +148,7 @@ A2A の前提（2026-11 時点のドキュメント）:
 - 呼ぶ側のエージェント ID に、受け側プロジェクトの Foundry Agent Consumer ロールが要る
 - 呼び出しはエージェント ID での「アプリとしての呼び出し」に限る。利用者に代わって呼ぶ方式は、エンドポイントの認証方式を Routines の起動と両立しないもの（`AgentBlueprint`）に変える必要があるため使わない
 - テキストのみで、ストリーミングには対応していない
-- harness 付きエージェントで受け側の A2A が動くかは、まだ確かめていない（12節）
+- harness 付きエージェントで受け側の A2A が動くことは、確認用の環境で確かめた。呼ぶ側には接続（種類 `RemoteA2A`、認証 `AgenticIdentityToken`、宛先 `https://ai.azure.com`）を作り、`A2ATool` で参照する（再検討案 9.2 節）
 
 **人の承認が要るやり取りの境目**【Claude判断】
 原則: **他チームの人の目に触れるものは、発信元チームの人が承認する。** エージェントどうしの内部のやり取りは承認なしで進めてよい。
@@ -301,7 +301,7 @@ A2A の前提（2026-11 時点のドキュメント）:
 なくしたもの: ホステッドエージェントのコンテナ、Container Apps Sandboxes、エージェントへの Cosmos DB の読み取り権限。
 
 ### 6.3 地域
-Japan East を使う。【Claude判断】Copilot harness と Foundry Memory の提供地域に入っており、Routines の除外地域にも入っていない。確認用の環境では、Japan East で harness 付きエージェントが動いた。RAI ポリシーの Network ルールの提供地域は未確認なので、着手時に確かめる（12節）。選んだ地域と理由は README に書く。
+Japan East を使う。【Claude判断】Copilot harness と Foundry Memory の提供地域に入っており、Routines の除外地域にも入っていない。確認用の環境では、Japan East で harness 付きエージェントが動いた。RAI ポリシーの Network ルールも、確認用の環境の Japan East で使えた。選んだ地域と理由は README に書く。
 
 ---
 
@@ -418,14 +418,14 @@ Plan 2 で作った HTTP の書き込み窓口（`gateway_http.py`）は、MCP �
 - 承認なしで実行してよい行動を、チームが事前に許可できる（例: 朝のまとめの配信）。Dots の「繰り返しの低リスクな行動は事前に承認できる」にならう
 - 作業環境には Azure の資格情報を置かない。作業環境に入るデータは、MCP の道具の結果と、エージェントが自分で作ったファイルだけである
 - 作業環境から外への通信は、RAI ポリシーの Network ルールで PyPI（`pypi.org`、`files.pythonhosted.org`）だけに絞る。解析のたびにライブラリを入れるため（7.6 節）【Claude判断】
-- harness の道具のうち、Web 取得とサブエージェントは使わない。設定で外せない場合は、指示文で使わないよう書く【Claude判断】
+- harness の道具のうち、Web 取得とサブエージェントは外す（`MicrosoftCopilotToolsetPreview` で、ファイルの読み書きとシェルだけを有効にする）【Claude判断】。ただし Web 取得を外しても、シェルの `curl` で外へ出られる。外への通信を止めるのは上の RAI ポリシーである
 
 ### 7.6 解析（harness の作業環境）
 【制作者決定（D4）】
 - 調査1件に会話1本を割り当てるので、作業環境も調査ごとに分かれる。サンドボックスが休止・再開されても中身は残るので、後日に続きから調べられる
 - 作業環境は Python 3.13 で、numpy などは最初は入っていない。解析の最初に `pip install numpy scipy matplotlib` を実行する（spike で約20秒）。python-control は使わない。一次遅れのモデルは scipy で書ける
 - HILS のログは、MCP の道具が Blob から読み、テキスト（CSV）で返す。エージェントはそれを作業環境のファイルに書いてから解析する。架空のログは小さく作る（目安は数百行）【Claude判断】
-- 作ったグラフ（PNG）は Foundry Files に上げて返す。BFF がファイル ID から取得して画面に出し、`messages` の添付として参照を残す。エージェントの `instance_identity` には、プロジェクトの Foundry User ロールが要る（7.10 節）
+- 作ったグラフ（PNG）は、harness に組み込まれた道具 `upload_file_from_workspace_to_foundry_project` で Foundry Files に上げる。エージェントは返ったファイル ID を `post_message` の添付に `foundry-file:<ID>` として入れる。BFF は**プロジェクトの** OpenAI クライアント（`project.get_openai_client().files.content(<ID>)`）で取得して画面に出す（エージェントのエンドポイント用のクライアントでは取れない）。エージェントの `instance_identity` には、プロジェクトの Foundry User ロールが要る（7.10 節）
 - 回生協調の簡易モデル（数式で書いた一次遅れ程度の単純なもの）を用意する。「信号の周期が変わると応答がどれだけ遅れるか」を再現する。モデルの中身は【実装者裁量】。ただし結果がシナリオ1の筋書き（約15ms の遅れ）と矛盾しないこと。モデルのコードはスキルに含めて渡す
 - 評価チームのアシスタントが解析を担う。他チームのアシスタントは、評価のアシスタントに `analysis_request` で依頼する
 
@@ -433,6 +433,8 @@ Plan 2 で作った HTTP の書き込み窓口（`gateway_http.py`）は、MCP �
 【制作者決定（D2）】
 - **Foundry Memory の Memory ストア**（チームの好み）: harness は Memory を直接使えないので、MCP サーバーが Memory ストアの API を呼ぶ。道具は「覚える」「思い出す」「忘れる」の3つで、scope は呼び出し元のチーム ID（トークンから決める。エージェントに scope を選ばせない）
 - 抽出と統合を Memory に任せるか、項目の直接の追加・削除だけにするかは【実装者裁量】。ただし「忘れて」と言われたら、その項目が確実に消えること
+- Memory ストアの削除は項目 ID だけで行える（scope を確かめない）。項目 ID は scope 名の base64 で始まるので、MCP サーバーは消す前に、その ID が呼び出し元のチームの scope のものかを確かめる
+- 記憶を読み書きする ID（Functions、BFF）には、アカウントのスコープで Cognitive Services OpenAI User を与える。プロジェクトとアカウントのマネージド ID にも、アカウントのスコープで Foundry User と Cognitive Services OpenAI User を与える（確認用の環境で、これがないと埋め込みモデルの呼び出しが 401 になった）
 - **見張り条件**: Functions が LLM なしで判定する必要があるので、Memory ではなく `watches` に構造化して保存する。エージェントは会話で頼まれたら MCP の道具で `watches` に書く
 - 画面の「覚えていること」には、Memory の項目と `watches` を並べて出す。BFF は Memory ストアを自分の ID で読む
 
@@ -443,7 +445,7 @@ harness 付きエージェントは、エージェントのエンドポイント
 |---|---|---|
 | チャット（人とアシスタント） | チームに1本。チーム全員で共有 | BFF（ID を `team_settings` に持つ）【実装者裁量: 持たせる場所】 |
 | 調査 | 調査1件に1本 | Functions（ID を `investigations` と `agent_runs` に持つ） |
-| 朝のまとめ・ブリーフィング | Routines の1回の実行に1本 | Routines（12節で確かめる） |
+| 朝のまとめ・ブリーフィング | Routines の1回の実行に1本 | Routines（会話を指定しない Routine は、起動のたびに新しい会話を作る。こちらで作った会話を指定すると 404 になる） |
 
 - 画面からのチャットは、BFF が自分の ID でエージェントのエンドポイントに送る。エージェントからは BFF が呼んでいるようにしか見えないので、誰の発言かは本文の先頭に入れる（例: 「田中: 〜」）【Claude判断】。BFF の ID には、プロジェクトの Foundry User ロールを与える
 - アシスタントが先に話しかけたメッセージも会話欄に並べる必要がある。そのため、画面に出すものの正本は `messages` コンテナとする。チャットの応答は BFF が `messages` に書き写す。先に話しかけるメッセージは、エージェントが MCP の道具で `messages` に書く
@@ -468,7 +470,7 @@ harness 付きエージェントは、エージェントのエンドポイント
    - Routines を作る
    - RAI ポリシー（Network ルール）を作り、エージェントに付ける
 
-エージェントの定義は、azd の `azure.ai.agent` サービスで扱う（`AZD_ALPHA_ENABLE_AGENTS_MANAGED_HARNESS=true` と、`azure.ai.agents` 拡張 1.0.0-beta.22 以上が要る）。azd で harness と MCP の道具を宣言できない場合は、フックの Python スクリプトから SDK で作る（spike はこの方法で作った）。どちらの場合も、読者の手作業は増やさない。
+エージェントの定義は、フックの Python スクリプトから SDK で作る。【Claude判断（第2版の改訂、2026-11-08）】azd の `azure.ai.agent` サービスでも harness、MCP の道具、スキルを宣言できることは確かめた。それでも SDK にした理由は3つある。指示文が長く、チームごとのファイルから読みたいこと。azd が生成する定義は `infra.provider: microsoft.foundry` で、本書の Bicep の構成と1つにまとめる方法を確かめていないこと。ロール、対応表、Routines、RAI ポリシーのためにフックはどのみち要ること。記事と README では、azd でも定義できることに触れる。読者の手作業は増やさない。
 
 harness を使うかどうかは、エージェントを作るときにしか選べない。作り直すとエージェント ID が変わるので、フックは毎回 `team_settings.agent_client_id` とロールを合わせ直す。
 
@@ -476,7 +478,7 @@ harness を使うかどうかは、エージェントを作るときにしか選
 第2版の構成から導かれる決まり。実装でこれを破らない。【Claude判断】
 1. **関数ツールは使わない。** 関数ツールは呼び出したアプリが実行して結果を返す仕組みなので、Functions や Routines から起動したときに実行する人がいない。道具はすべてサーバー側で動くもの（MCP、Toolbox、宣言型の道具）にする
 2. **エージェントは Cosmos DB に直接触れない。** 読み書きはすべて MCP サーバーを通る
-3. **エージェントのエンドポイントの認証方式は Entra のままにする。** Routines の起動には Entra（`AzureRbac`）の方式が要る。spike では `authorization_schemes` が既定で `Entra` だったので、既定のままで足りるとみている。Routines から実際に起動できるかは 12 節で確かめる
+3. **エージェントのエンドポイントの認証方式は Entra のままにする。** Routines の起動には Entra（`AzureRbac`）の方式が要る。既定（`Entra`）のままで、Routines から起動できることを確認用の環境で確かめた
 4. **調査1件に会話1本。** チャットはチームに1本
 5. **harness が管理する項目は指定しない。** `temperature`、`max_output_tokens`、`truncation` などを送るとエラーになる
 6. **エージェントを作ったあとにロールを割り当てる。** 7.10 節のフックで行う
@@ -529,15 +531,6 @@ harness を使うかどうかは、エージェントを作るときにしか選
 - フォルダ構成
 
 ## 12. 未決事項
-確認用の環境で、まだ確かめていないことがある。どれも実装の最初に確かめ、成り立たない場合は右の代わりの方法に切り替える。切り替えたときは、この節と該当する節を書き直す。
-
-| 確かめること | 成り立たない場合 |
-|---|---|
-| Foundry Files に上げたグラフを、BFF の ID で取得できるか（7.6 節） | エージェントがグラフの数値（時系列）を MCP の道具で `messages` に添付し、画面がグラフを描く |
-| Functions から Memory ストアの API を、scope＝チーム ID で読み書きできるか（7.7 節） | Cosmos DB に `team_memory` コンテナを作り、MCP の道具で読み書きする |
-| Routines を cron `0 8 * * *`、`Asia/Tokyo` で作り、`dispatch_async` で手動起動できるか。harness 付きエージェントの会話をどう扱うか（7.3、7.8 節） | 朝のまとめとブリーフィングも `schedules` + tick に戻す |
-| harness 付きエージェントで受け側の A2A を有効にし、統括から呼べるか（4.2 節） | 「尋ねる」も `agent_mail` の `question` / `answer` で行う。統括は答えがそろってから続きを行う |
-| azd の `azure.ai.agent` サービスで、harness と MCP の道具を宣言できるか（7.10 節） | フックの Python スクリプトから SDK で作る |
-| RAI ポリシーの Network ルールが Japan East で使えるか（7.5 節） | 外への通信を絞らずに進め、README に書く。作業環境には資格情報がなく、入るデータは架空のものだけなので、漏れて困るものはない |
+第2版で未決だった6項目は、Plan 3 の最初に確認用の環境で確かめ、すべて第一の案で成り立った（再検討案 9.2 節）。代わりの方法には切り替えていない。エージェントの定義だけは、azd でもできると確かめたうえで SDK を選んだ（7.10 節）。
 
 Zenn 記事の執筆と撮影は今回の範囲外とし、別の作業で行う【制作者決定】。

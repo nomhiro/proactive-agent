@@ -233,7 +233,7 @@ spike の結果、2 か 6 が成り立たない場合は、D1 を B（ホステ�
 | 6 | **成り立つ** | harness 付きエージェントは `background=True` を受け付けた（受け付けた直後は `in_progress`、ポーリングで `completed`）。Functions のマネージド ID（プロジェクトに Foundry User）からも、キューで起動して完了まで確かめた。かかった時間は 10〜25 秒 |
 | 3 | **条件付きで成り立つ** | 作業環境は Python 3.13.17 で、numpy は最初は入っていない。シェルで `pip install numpy scipy matplotlib` を実行すると、既定のネットワーク設定のまま入った（numpy 2.5.4、scipy 1.18.1、matplotlib 3.11.2、20 秒ほど）。作業環境は会話ごとに別なので、解析のたびに入れ直す。RAI ポリシーで外向きの通信を絞る場合は、PyPI のホストを許可に入れる。Code Interpreter で代える必要はない |
 | 1 | 一部だけ | Japan East で harness 付きエージェントを作り、gpt-5.4-mini で動いた。ただし azd の `azure.ai.agent` サービスではなく SDK で作ったので、azd での定義は Plan 3 の最初に確かめる。`azd ai connection create` は、azd の環境に `AZURE_AI_PROJECT_ID` がないと失敗する |
-| 4、5、7、8 | 未実施 | Plan 3 で順に確かめる |
+| 4、5、7、8 | 9.2 節 | Plan 3 の Task 1 で確かめた |
 
 そのほかに見えたこと:
 
@@ -241,6 +241,37 @@ spike の結果、2 か 6 が成り立たない場合は、D1 を B（ホステ�
 - エージェントを作ると、エージェントごとに別のブループリント（`blueprint.client_id`）もできた
 
 **結論: 2 と 6 が成り立ったので、D1 は A（harness）で進める。D4 も A（作業環境で pip install）でよい。**
+
+### 9.2 結果（2026-11-08、Plan 3 Task 1、同じ環境）
+
+スクリプトは `spikes/harness/scripts/probe_*.py`。
+
+| 確認 | 結果 | わかったこと |
+|---|---|---|
+| 4 グラフ | **成り立つ** | harness には組み込みの道具 `upload_file_from_workspace_to_foundry_project` があり、結果の `function_call_output` に `{"file_id": "assistant-…", "filename", "bytes"}` が入る。取得は**プロジェクトの** OpenAI クライアント（`project.get_openai_client().files.content(<ID>)`）で行い、Foundry User を持つ自分の ID で PNG（53 KB）が取れた。エージェントのエンドポイント用のクライアント（`get_openai_client(agent_name=…)`）からは 404。アップロードには、エージェントの `instance_identity` にプロジェクトの Foundry User が要る |
+| 5 記憶 | **成り立つ（ロールの追加が要る）** | 手元の ID と Functions の ID の両方で、scope の分離、検索、一覧、削除を確かめた。最初は埋め込みモデルの呼び出しが 401 で失敗した。通ったのは、呼び出す ID（自分、Functions）にアカウントのスコープで Cognitive Services OpenAI User を付け、プロジェクトとアカウントのマネージド ID にアカウントのスコープで Foundry User と Cognitive Services OpenAI User を付けたあと（どれが必須かは切り分けていない）。項目 ID は「scope 名の base64 + `_` + ランダム」で、**削除は項目 ID だけでできる**。そのため MCP サーバーは、消す前に ID が呼び出し元の scope のものかを確かめる |
+| 7 Routines | **成り立つ（会話は指定しない）** | cron `0 8 * * *`、`Asia/Tokyo` で作成でき、自分の ID からも Functions の ID（Foundry User だけ）からも `dispatch` で起動できた。会話を指定しない Routine は、**起動のたびに新しい会話を作り**、エージェントは MCP の道具を呼んだ（`list_runs` に `conversation_id` と `response_id` が出る）。自分が作った会話を指定した Routine は 404 で失敗した |
+| 8 A2A | **成り立つ** | spike-b の受け側 A2A を `update_details` で有効にし、接続（`RemoteA2A`、認証 `AgenticIdentityToken`、宛先 `https://ai.azure.com`、ARM の PUT）を作り、`A2ATool(a2a_version=V1_0, project_connection_id=…)` を持つ spike-chief から頼むと、spike-b の ID で whoami が呼ばれた。spike-chief の `instance_identity` に Foundry Agent Consumer（`eed3b665-ab3a-47b6-8f48-c9382fb1dad6`）を付け、5 分待った |
+| 決定 2 | `True` | Foundry は `server/discover`、`initialize`、`notifications/initialized`、`tools/list`、`tools/call` のすべてに、検証できるトークンを付けていた |
+| azd での定義 | **できる** | `azd ai agent init --kind prompt --harness microsoft_copilot_preview --project-id <ID>` で既存のプロジェクト（`host: azure.ai.project`、`endpoint`）を参照する `azure.yaml` ができ、MCP の道具（`project_connection_id` に接続名）、スキル（`host: azure.ai.skill`）、道具の絞り込みを足して `azd deploy` できた。ただし生成される `azure.yaml` は `infra.provider: microsoft.foundry` で、本番の Bicep の構成と1つにまとめる方法は確かめていない |
+| スキル | **できる** | `project.beta.skills.create(name=…, inline_content=SkillInlineContent(description=…, instructions=…))` で作り、`PromptAgentDefinition(skills=[SkillReference(name=…)])` で付けると、エージェントがスキルの中身を答えた |
+| harness の道具 | **外せる** | `tools` に `MicrosoftCopilotToolsetPreview(default_config=…(enabled=False), configs=[…filesystem_read / filesystem_write / shell を enabled=True])` を入れると、Web 取得は使えなくなった。ただし Web 取得を外しても、エージェントはシェルの `curl` で同じページを取りに行った。外への通信を止めるのは RAI ポリシーの役目 |
+| RAI の Network ルール | **Japan East で使える** | `Microsoft.CognitiveServices/accounts/raiPolicies`（`2026-05-15-preview`）に `egressPolicy`（`defaultAction: Deny`、`pypi.org` と `files.pythonhosted.org` を許可）を PUT し、`RaiConfig(rai_policy_name=<ARM の ID>)` で付けると、`pip install numpy` は通り、`curl https://example.com` は 403 になった |
+
+**Plan 3 の決定の表**
+
+| 決定 | 結果 |
+|---|---|
+| 13 記憶 | `foundry` |
+| 14 グラフ | `foundry-files` |
+| 15 尋ねる | `a2a` |
+| 16 Routines | `routines`（会話は指定しない） |
+| エージェントの定義 | `sdk`（azd でもできるが、理由は設計書 7.10 節） |
+| スキルの添付 | `project.beta.skills.create` と `SkillReference` |
+| RAI の Network ルール | Japan East で使える。PyPI だけを許可できた |
+| harness の道具 | 外せる（`MicrosoftCopilotToolsetPreview`） |
+| 決定 2 | `DISCOVERY_REQUIRES_TOKEN = True` |
+| 決定 17 | Functions の ID（プロジェクトの Foundry User）で手動起動できた。追加のロールは要らない |
 
 ---
 

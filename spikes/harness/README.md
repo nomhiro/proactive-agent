@@ -37,6 +37,21 @@ uv run --no-project --with-requirements scripts/requirements.txt python scripts/
 
 結果は `results/` に JSON で残ります（ID などが入るのでコミットしない）。要点は再検討案の 9 節に書き足します。
 
+## Plan 3 Task 1 の確認（4、5、7、8 ほか）
+
+結果は再検討案の 9.2 節。`uv run --no-project --with-requirements scripts/requirements.txt python <スクリプト>` で流す（Windows では `PYTHONIOENCODING=utf-8` を付ける）。
+
+| スクリプト | 確かめること |
+|---|---|
+| `scripts/probe_mcp_methods.py` | MCP のどのメソッドにトークンが付くか（先に `probe.py mcp` を流す） |
+| `scripts/probe_files.py` | グラフを Foundry Files で返し、自分の ID で取得できるか |
+| `scripts/probe_memory.py` | Memory ストアを scope＝チームで読み書きできるか（自分と Functions の ID） |
+| `scripts/probe_routines.py` | Routines の作成と手動起動（自分と Functions の ID） |
+| `scripts/probe_a2a.py` | 受け側の A2A と、A2A の道具での呼び出し |
+| `scripts/probe_agent_config.py` | スキルの添付、harness の道具の絞り込み、RAI ポリシーの外向き通信の制限 |
+
+記憶の確認のために、Bicep の外で次のロールを手で付けた（`az role assignment create`）: 自分と Functions の ID にアカウントのスコープで Cognitive Services OpenAI User、プロジェクトとアカウントのマネージド ID にアカウントのスコープで Foundry User と Cognitive Services OpenAI User。azd で定義したエージェントの確認は、scratchpad に `azd ai agent init` で作った別の azd プロジェクトで行った。
+
 ## 片付け
 
 ```powershell
