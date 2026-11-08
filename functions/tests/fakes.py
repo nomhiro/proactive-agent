@@ -73,3 +73,11 @@ class RecordingInvoker:
         if self.fail:
             raise RuntimeError("エージェントを起動できませんでした")
         self.calls.append(request)
+
+
+class RecordingPublisher:
+    def __init__(self) -> None:
+        self.events = []
+
+    def publish(self, team, event: dict) -> None:
+        self.events.append((team, event))
