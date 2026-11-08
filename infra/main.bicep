@@ -1,4 +1,4 @@
-// proactive-agent の基盤一式（Plan 2）。azd up で作る。
+// proactive-agent の基盤一式（Plan 2、Plan 3 で Foundry を追加）。azd up で作る。
 targetScope = 'subscription'
 
 @minLength(1)
@@ -12,6 +12,15 @@ param location string
 
 @description('デプロイする人の object ID。シード投入のために Cosmos のデータ権限を付ける')
 param principalId string = ''
+
+@description('エージェントが使うモデル（Foundry のデプロイ名も同じ）')
+param modelName string = 'gpt-5.4-mini'
+param modelVersion string = '2026-03-17'
+@description('モデルのレートの上限（1000 トークン/分）。GlobalStandard は使った分だけの課金で、容量に固定費はかからない')
+param modelCapacity int = 500
+
+@description('チームの記憶を置く Foundry Memory の Memory ストアの名前。ストアはフックが作る')
+param memoryStoreName string = 'team-memory'
 
 var resourceToken = toLower(uniqueString(subscription().id, environmentName, location))
 var tags = { 'azd-env-name': environmentName }
@@ -31,7 +40,7 @@ module monitoring 'modules/monitoring.bicep' = {
 module storage 'modules/storage.bicep' = {
   scope: rg
   name: 'storage'
-  params: { location: location, tags: tags, resourceToken: resourceToken }
+  params: { location: location, tags: tags, resourceToken: resourceToken, deployerPrincipalId: principalId }
 }
 
 module identity 'modules/identity.bicep' = {
@@ -70,6 +79,21 @@ module gatewayApp 'modules/gateway-app.bicep' = {
   params: { environmentName: environmentName, resourceToken: resourceToken }
 }
 
+module foundry 'modules/foundry.bicep' = {
+  scope: rg
+  name: 'foundry'
+  params: {
+    location: location
+    tags: tags
+    resourceToken: resourceToken
+    deployerPrincipalId: principalId
+    functionPrincipalId: identity.outputs.principalId
+    modelName: modelName
+    modelVersion: modelVersion
+    modelCapacity: modelCapacity
+  }
+}
+
 module functions 'modules/functions.bicep' = {
   scope: rg
   name: 'functions'
@@ -90,6 +114,9 @@ module functions 'modules/functions.bicep' = {
     webPubSubHub: webPubSub.outputs.hub
     gatewayTenantId: tenant().tenantId
     gatewayAudiences: '${gatewayApp.outputs.appId},${gatewayApp.outputs.identifierUri}'
+    blobEndpoint: storage.outputs.blobEndpoint
+    foundryProjectEndpoint: foundry.outputs.projectEndpoint
+    memoryStoreName: memoryStoreName
   }
 }
 
@@ -105,4 +132,12 @@ output WEBPUBSUB_HUB string = webPubSub.outputs.hub
 output GATEWAY_APP_ID string = gatewayApp.outputs.appId
 output GATEWAY_APP_ID_URI string = gatewayApp.outputs.identifierUri
 output AZURE_STORAGE_BLOB_ENDPOINT string = storage.outputs.blobEndpoint
+output FOUNDRY_ACCOUNT_NAME string = foundry.outputs.accountName
+output FOUNDRY_ACCOUNT_ID string = foundry.outputs.accountId
+output FOUNDRY_PROJECT_ENDPOINT string = foundry.outputs.projectEndpoint
+output FOUNDRY_PROJECT_ID string = foundry.outputs.projectId
+output AZURE_AI_PROJECT_ID string = foundry.outputs.projectId
+output MODEL_DEPLOYMENT string = foundry.outputs.modelDeployment
+output EMBEDDING_DEPLOYMENT string = foundry.outputs.embeddingDeployment
+output MEMORY_STORE_NAME string = memoryStoreName
 output APPLICATIONINSIGHTS_CONNECTION_STRING string = monitoring.outputs.appInsightsConnectionString

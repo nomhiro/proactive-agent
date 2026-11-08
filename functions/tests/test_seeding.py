@@ -23,7 +23,7 @@ def test_seed_into_empty_store():
     store = MemoryStore()
     counts = seed_store(store, reset=False, system_now=NOW)
     assert counts["artifacts"] == 43 and counts["test_runs"] == 26
-    assert counts["team_settings"] == 7 and counts["schedules"] == 5
+    assert counts["team_settings"] == 7 and counts["schedules"] == 1
     assert all(d["origin"] == "seed" for d in store.query("test_runs"))
     assert virtual_now(store) == SEED_NOW
 
@@ -53,3 +53,33 @@ def test_reset_clears_and_keeps_agent_client_id():
     assert store.get("team_settings", "ts-integrated_control")["agent_client_id"] == "agent-ic"
     assert store.get("team_settings", "ts-motor_control").get("agent_client_id") is None
     assert virtual_now(store) == SEED_NOW
+
+
+class FakeBlobWriter:
+    def __init__(self):
+        self.files = {}
+
+    def write_text(self, path, text):
+        self.files[path] = text
+
+
+def test_seed_uploads_scenario_logs():
+    from vehicle_core.hils_logs import scenario_log_blobs
+
+    from proactive_functions.seeding import upload_hils_logs
+    writer = FakeBlobWriter()
+    n = upload_hils_logs(writer, scenario_log_blobs())
+    assert n == len(writer.files) >= 3
+    assert {f"hils-logs/TC-HILS-031/s2-{i}.csv" for i in (1, 2, 3)} <= writer.files.keys()
+
+
+def test_reset_records_clock_baseline_for_morning_dispatch():  # 最終レビューの I1
+    # シードの作り直しは「時計を動かすこと」ではない。直後に朝へ進めたら Routines を起動する
+    from proactive_functions.foundry_invoker import morning_dispatch_due
+    store = MemoryStore()
+    real = datetime(2026, 11, 8, 12, 0, tzinfo=JST)
+    seed_store(store, reset=True, system_now=real)
+    offset = store.get("system", "clock")["offset_seconds"]
+    assert store.get("system", "last_tick")["offset_seconds"] == offset
+    target = datetime(2026, 11, 18, 8, 0, tzinfo=JST)
+    assert morning_dispatch_due(store, target, (target - real).total_seconds()) is True

@@ -1,6 +1,6 @@
 """JST の時計。デモでは仮想の時計で時間を進める。"""
 
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from typing import Protocol
 
 from .constants import JST
@@ -34,3 +34,17 @@ class VirtualClock:
 
     def set(self, dt: datetime) -> None:
         self._now = to_jst(dt)
+
+
+def crossed_morning(before: datetime, after: datetime, at: time | None = None) -> bool:
+    """JST で before < 朝の時刻 <= after となる朝（既定 8:00）が1つでもあれば真。"""
+    from .constants import DIGEST_TIME
+
+    at = at or DIGEST_TIME
+    before, after = to_jst(before), to_jst(after)
+    if after <= before:
+        return False
+    first = datetime.combine(before.date(), at, tzinfo=JST)
+    if first <= before:
+        first += timedelta(days=1)
+    return first <= after

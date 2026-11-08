@@ -1,0 +1,5 @@
+azure-functions
+azure-identity
+azure-ai-projects>=2.9.0
+azure-storage-blob
+pyjwt[crypto]

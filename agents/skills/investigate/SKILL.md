@@ -1,0 +1,22 @@
+---
+name: investigate
+description: 変更、試験結果、メール、定時の仕事をきっかけにした調査の進め方。調べる順序と、記録の残し方を決める。
+---
+
+# 調査の進め方
+
+調査の依頼には、依頼 ID、きっかけ、起点のデータ、関係するデータ ID、知らせ方の下限、作業記録の run_id が書いてある。次の順に進める。
+
+1. `get_now` を呼び、いまの時刻と、静かな時間帯かどうか（in_quiet_hours）を確かめる。日付や「何日後」の計算は、この時刻を基準にする
+2. 起点のデータがあれば `trace_impact` を呼び、影響を受けるデータ、チーム、統合リリース、安全要求への影響を求める。影響範囲を自分で推測しない
+3. 関係するデータを読む。`get_artifact` で起点と影響を受けるデータの中身を、`get_test_runs` で関係するテストケースの試験結果を確かめる。チームの見張り（`list_watches`）に合うかも確かめる
+4. 同じ件をすでに知らせていないかを `list_notifications` で、チームの好みを `recall` で、チームの設定を `get_team_settings` で確かめる
+5. 数値で確かめる必要があれば、評価チームのアシスタントに `send_mail` で `analysis_request` を送る（評価チームは自分で analysis スキルを使う）
+6. 知らせるかどうかを notify-decision スキルで決め、`record_notification` で記録する
+7. 他チームのデータに影響があれば、drafting スキルに沿って `create_proposal` で `impact_notice` の下書きを作る
+8. チームに話しかける場合は `post_message` で書く。通知や下書きと結びつけるときは notification_id や proposal_id を渡す
+9. 最後に `finish_run` を run_id と要約で呼ぶ。要約には、結論、分類とその理由、作った通知や下書きの ID を書く
+
+途中で失敗した道具があっても、わかったことまでを要約に書いて `finish_run` で閉じる。閉じないと、画面の「いま」に残り続ける。
+
+依頼に run_id がない調査（チームとの会話の中で頼まれた調査など）は、`start_run` で作業記録を始め、返った run_id を最後に `finish_run` に渡す。

@@ -25,6 +25,9 @@ class InvestigationRecord(InvestigationRequest):
     merged_into: str | None = None
     dispatched_at: AwareDatetime | None = None
     error: str | None = None
+    # FoundryInvoker が起動した会話と応答（Plan 3 決定 10）
+    conversation_id: str | None = None
+    response_id: str | None = None
 
 
 class AgentInvoker(Protocol):

@@ -15,3 +15,6 @@ services:
 hooks:
   postprovision:
     run: uv run --package proactive-functions python scripts/seed.py
+  # MCP 接続、エージェント4体、スキル、ロール、対応表、Memory ストア、Routines、RAI ポリシー（設計書 7.10 節）
+  postdeploy:
+    run: uv run --package proactive-deploy python -m proactive_deploy.setup

@@ -2,6 +2,8 @@ from datetime import datetime, timedelta
 
 from vehicle_core.constants import JST
 from vehicle_core.models import AgentMail, Notification
+from vehicle_core.constants import AGENT_TEAMS, Team
+from vehicle_core.models import Schedule
 from vehicle_core.seed import build_dataset, build_schedules
 
 from proactive_functions.tick import TickReport, run_tick
@@ -21,9 +23,20 @@ def tick(store, now, pub=None, inv=None):
     return run_tick(store, inv or RecordingInvoker(), pub or RecordingPublisher(), now)
 
 
+def daily_schedules() -> list[Schedule]:
+    """毎日の予定（payload.recur == "daily"）。シードからは外れたが、tick の繰り返しの処理は残っているので試す。"""
+    out = []
+    for team in sorted(AGENT_TEAMS):
+        kind = "briefing" if team == Team.CHIEF_ENGINEER else "digest"
+        series = f"sch-{kind}-{team.value}"
+        out.append(Schedule(id=f"{series}-20261118", team=team, due_at=MORNING, task=f"morning_{kind}",
+                            payload={"recur": "daily", "series": series}))
+    return out
+
+
 def seeded_schedules():
     store = MemoryStore()
-    for s in build_schedules(build_dataset()):
+    for s in [*build_schedules(build_dataset()), *daily_schedules()]:
         store.create("schedules", s.model_dump(mode="json"))
     return store
 

@@ -1,0 +1,2 @@
+-r ../mcp/requirements.txt
+azure-storage-queue

@@ -27,3 +27,16 @@ def test_virtual_clock_advance_and_set():
 def test_virtual_clock_rejects_naive_start():
     with pytest.raises(ValueError):
         VirtualClock(datetime(2026, 11, 17))
+
+
+def jst(*a):
+    return datetime(*a, tzinfo=JST)
+
+
+def test_crossed_morning():
+    from vehicle_core.clock import crossed_morning
+    assert crossed_morning(jst(2026, 11, 17, 21, 10), jst(2026, 11, 18, 8, 0))
+    assert not crossed_morning(jst(2026, 11, 18, 8, 0), jst(2026, 11, 18, 9, 0))
+    assert crossed_morning(jst(2026, 11, 19, 9, 0), jst(2026, 11, 23, 7, 0))
+    assert not crossed_morning(jst(2026, 11, 18, 9, 0), jst(2026, 11, 18, 15, 0))
+    assert not crossed_morning(jst(2026, 11, 18, 9, 0), jst(2026, 11, 18, 9, 0))

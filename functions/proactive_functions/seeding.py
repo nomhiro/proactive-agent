@@ -10,6 +10,7 @@ from datetime import datetime
 
 from vehicle_core.seed import SEED_NOW, build_dataset, build_schedules
 
+from .blobs import BlobWriter
 from .clock import CLOCK_CONTAINER, CLOCK_ID, set_virtual_now
 from .store import Conflict, Store
 
@@ -53,4 +54,13 @@ def seed_store(store: Store, *, reset: bool, system_now: datetime) -> dict[str, 
 
     if reset or store.get(CLOCK_CONTAINER, CLOCK_ID) is None:
         set_virtual_now(store, SEED_NOW, system_now)
+        from .foundry_invoker import record_clock_baseline
+        record_clock_baseline(store, SEED_NOW, store.get(CLOCK_CONTAINER, CLOCK_ID)["offset_seconds"])
     return counts
+
+
+def upload_hils_logs(writer: BlobWriter, logs: dict[str, str]) -> int:
+    """HILS ログを Blob に置く（上書き）。logs は「コンテナ/名前」→ CSV。置いた件数を返す。"""
+    for path, text in logs.items():
+        writer.write_text(path, text)
+    return len(logs)

@@ -5,16 +5,26 @@
 2. 定時の仕事: 時刻を過ぎた予定から調査依頼を作り、毎日の予定は次の回を作る
 3. 返事の期限切れ: 影響の連絡に 48 時間返事がないスレッドで、連絡を出したチームを起こす
 4. 受け渡し: not_before を過ぎた調査依頼をまとめてエージェントに渡す
+5. 朝の Routines: 時計を進めて朝 8:00 を越えたときだけ、4体の朝のまとめを手動で起動する（Plan 3 決定 17）
+6. 片付け: 終わらなかった調査の作業記録を閉じる（FoundryInvoker のときだけ。Plan 3 決定 11）
 """
 
 from datetime import datetime, timedelta
 
 from pydantic import BaseModel
+from vehicle_core.constants import AGENT_TEAMS
 from vehicle_core.clock import to_jst
 from vehicle_core.escalation import needs_escalation
 from vehicle_core.models import AgentMail, Classification, MailKind, Notification, Schedule
 from vehicle_core.routing import InvestigationRequest, idempotency_key
 
+from .foundry_invoker import (
+    FoundryInvoker,
+    RoutineDispatcher,
+    dispatch_morning_routines,
+    morning_dispatch_due,
+    reconcile_runs,
+)
 from .investigations import AgentInvoker, dispatch_due, enqueue
 from .publisher import Publisher, refresh_event
 from .docs import models, parse_each
@@ -26,16 +36,24 @@ class TickReport(BaseModel):
     ran_schedule_ids: list[str]
     overdue_thread_ids: list[str]
     dispatched_ids: list[str]
+    routine_teams: list[str] = []
+    reconciled_run_ids: list[str] = []
 
 
-def run_tick(store: Store, invoker: AgentInvoker, publisher: Publisher, now: datetime) -> TickReport:
+def run_tick(store: Store, invoker: AgentInvoker, publisher: Publisher, now: datetime, *,
+             routines: RoutineDispatcher | None = None, offset_seconds: float = 0.0) -> TickReport:
     now = to_jst(now)
-    return TickReport(
+    report = TickReport(
         delivered_notification_ids=_deliver(store, publisher, now),
         ran_schedule_ids=_run_schedules(store, now),
         overdue_thread_ids=_overdue_replies(store, now),
         dispatched_ids=dispatch_due(store, invoker, now),
     )
+    if routines is not None and morning_dispatch_due(store, now, offset_seconds):
+        report.routine_teams = dispatch_morning_routines(routines, sorted(AGENT_TEAMS, key=lambda t: t.value))
+    if isinstance(invoker, FoundryInvoker):
+        report.reconciled_run_ids = reconcile_runs(store, invoker.client_for, now)
+    return report
 
 
 def _deliver(store: Store, publisher: Publisher, now: datetime) -> list[str]:

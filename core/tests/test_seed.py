@@ -43,13 +43,10 @@ def test_no_real_company_names(dataset):
     assert not any(b in text for b in banned)
 
 
-def test_build_schedules_daily_and_release_check(dataset):
+def test_schedules_keep_only_release_gap_check(dataset):
+    # 朝のまとめとブリーフィングは Foundry Routines が起動する（Plan 3 決定 16）
     sch = {s.id: s for s in build_schedules(dataset)}
-    assert len(sch) == 5
-    d = sch["sch-digest-integrated_control-20261118"]
-    assert d.due_at == datetime(2026, 11, 18, 8, 0, tzinfo=JST) and d.payload["recur"] == "daily"
-    assert d.payload["series"] == "sch-digest-integrated_control"
-    assert sch["sch-briefing-chief_engineer-20261118"].task == "morning_briefing"
+    assert {s.task for s in sch.values()} == {"release_gap_check"}
     gap = sch["sch-release-gap-R3"]
     assert gap.team == Team.CHIEF_ENGINEER and gap.due_at == datetime(2026, 11, 23, 8, 0, tzinfo=JST)
     assert gap.payload == {"release_id": "R3"}

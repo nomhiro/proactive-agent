@@ -14,10 +14,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from _azd import cosmos_store  # noqa: E402
+from _azd import cosmos_store, env  # noqa: E402
+from azure.identity import DefaultAzureCredential  # noqa: E402
+from vehicle_core.hils_logs import scenario_log_blobs  # noqa: E402
 from vehicle_core.constants import JST  # noqa: E402
 
-from proactive_functions.seeding import seed_store  # noqa: E402
+from proactive_functions.blobs import AzureBlobs  # noqa: E402
+from proactive_functions.seeding import seed_store, upload_hils_logs  # noqa: E402
 
 
 def main() -> None:
@@ -29,6 +32,8 @@ def main() -> None:
     print(f"シード: {label}")
     for container, n in counts.items():
         print(f"  {container}: {n} 件")
+    blobs = AzureBlobs(env("AZURE_STORAGE_BLOB_ENDPOINT"), DefaultAzureCredential())
+    print(f"  HILS ログ: {upload_hils_logs(blobs, scenario_log_blobs())} 件")
 
 
 if __name__ == "__main__":
