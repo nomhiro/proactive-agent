@@ -41,3 +41,7 @@ def test_agent_teams_are_exactly_four():
 
 def test_team_settings_agent_client_id_defaults_to_none():
     assert TeamSettings(id="ts-x", team="evaluation").agent_client_id is None
+
+
+def test_team_settings_chat_conversation_id_defaults_to_none():
+    assert TeamSettings(id="ts-x", team=Team.EVALUATION).chat_conversation_id is None

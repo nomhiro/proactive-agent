@@ -19,6 +19,7 @@ class StepKind(StrEnum):
     CHANGE = "change"
     TEST_RUN = "test_run"
     HUMAN_SAYS = "human_says"
+    APPROVE = "approve"
 
 
 class ScenarioStep(BaseModel):
@@ -50,6 +51,11 @@ def _says(at: datetime, team: Team, person_id: str, text: str) -> ScenarioStep:
     return ScenarioStep(kind=StepKind.HUMAN_SAYS, at=at, team=team, person_id=person_id, text=text)
 
 
+def _approve(at: datetime, team: Team, person_id: str) -> ScenarioStep:
+    """そのチームの承認待ちの影響の連絡（impact_notice）のうち、最も古いものを人が送る。"""
+    return ScenarioStep(kind=StepKind.APPROVE, at=at, team=team, person_id=person_id)
+
+
 def _change(id_: str, at: datetime, artifact_id: str, path: str, before: Any, after: Any,
             expect: dict[str, Any]) -> ScenarioStep:
     event = ChangeEvent(id=id_, artifact_id=artifact_id, changed_by="tanaka", changed_at=at,
@@ -74,6 +80,7 @@ SCENARIOS: dict[str, Scenario] = {
             "deliver_at": "2026-11-18T08:00:00+09:00",
         }),
         _clock(_at(18, 8, 0)),
+        _approve(_at(18, 8, 20), IC, "tanaka"),
         _says(_at(18, 8, 40), MC, "sato", "今週は v2.1 で手一杯で、R3 までに 20ms 対応は無理です"),
         _says(_at(18, 8, 50), IC, "tanaka", "周期は CAN 負荷の都合で戻せません"),
     ]),

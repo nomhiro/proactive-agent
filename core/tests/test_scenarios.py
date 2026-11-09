@@ -85,3 +85,12 @@ def test_change_before_values_match_seed(dataset):
                 for part in fc.path.split("."):
                     value = value[part]
                 assert value == fc.before, (sc.id, fc.path)
+
+
+def test_s1_has_approve_step_between_morning_and_replies():
+    from vehicle_core.constants import Team
+    kinds = [s.kind for s in SCENARIOS["s1_signal_period"].steps]
+    assert kinds == ["change", "set_clock", "approve", "human_says", "human_says"]
+    approve = SCENARIOS["s1_signal_period"].steps[2]
+    assert approve.team == Team.INTEGRATED_CONTROL and approve.person_id == "tanaka"
+    assert approve.at == datetime(2026, 11, 18, 8, 20, tzinfo=JST)

@@ -114,11 +114,13 @@ class FoundryInvoker:
 
 
 def reconcile_runs(store: Store, client_for: Callable[[Team], ResponsesClient], now: datetime) -> list[str]:
-    """running のまま 2 分を過ぎた作業記録の応答を調べ、終わっていれば done にする（決定 11）。"""
+    """running のまま 2 分を過ぎた作業記録の応答を調べ、終わっていれば done にする（決定 11）。チャットの記録は飛ばす。"""
     now = to_jst(now)
     closed = []
     for doc, run in parse_each(store.query("agent_runs", {"state": "running"}), AgentRun):
         response_id = run.detail.get("response_id")
+        if run.detail.get("kind") == "chat":
+            continue  # チャットの返事は BFF が書き写してから閉じる（Plan 4 決定 6）
         if not response_id or now - to_jst(run.started_at) < RECONCILE_AFTER:
             continue
         try:

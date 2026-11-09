@@ -134,6 +134,18 @@ def test_reconcile_leaves_in_progress_and_recent_runs():
                for i in ["run-recent", "run-busy", "run-queued", "run-noresp"])
 
 
+def test_reconcile_runs_skips_chat_runs():
+    # detail.kind == "chat" の running の記録は、応答が completed でも閉じない（Plan 4 決定 6）
+    store = MemoryStore()
+    store.create("agent_runs", {"id": "run-chat-msg-1", "vehicle_id": VEHICLE_ID, "team": "motor_control",
+                                "state": "running", "title": "t", "started_at": (NOW - timedelta(minutes=5)).isoformat(),
+                                "detail": {"kind": "chat", "response_id": "resp-1"}})
+    fake = FakeResponses({"resp-1": "completed"})
+    assert reconcile_runs(store, lambda t: fake, NOW) == []
+    assert store.get("agent_runs", "run-chat-msg-1")["state"] == "running"
+    assert fake.calls == []
+
+
 def test_reconcile_survives_status_lookup_error():
     store = MemoryStore()
     running(store, "run-a", NOW - timedelta(minutes=5), response_id="resp-missing")
