@@ -7,6 +7,8 @@ param resourceToken string
 @description('デプロイする人の object ID。空ならデプロイする人へのロールは付けない')
 param deployerPrincipalId string = ''
 param functionPrincipalId string
+@description('Web アプリ（BFF）の ID。チャットの送信、グラフの取得、Memory ストアの読み取りに使う')
+param webPrincipalId string = ''
 param modelName string
 param modelVersion string
 @description('モデルのレートの上限（1000 トークン/分）。4体が同時に動くと 50 では足りず rate_limit_exceeded になった')
@@ -75,7 +77,10 @@ var deployer = empty(deployerPrincipalId) ? [] : [
 ]
 
 // プロジェクトのスコープ: エージェントの起動、Routines の手動起動、Memory ストアの API
-var projectAssignments = concat(deployer, [
+var web = empty(webPrincipalId) ? [] : [
+  { principalId: webPrincipalId, principalType: 'ServicePrincipal', roleId: foundryUser }
+]
+var projectAssignments = concat(deployer, web, [
   { principalId: functionPrincipalId, principalType: 'ServicePrincipal', roleId: foundryUser }
 ])
 
@@ -83,7 +88,10 @@ var projectAssignments = concat(deployer, [
 var deployerOpenAi = empty(deployerPrincipalId) ? [] : [
   { principalId: deployerPrincipalId, principalType: 'User', roleId: openAiUser }
 ]
-var accountAssignments = concat(deployerOpenAi, [
+var webOpenAi = empty(webPrincipalId) ? [] : [
+  { principalId: webPrincipalId, principalType: 'ServicePrincipal', roleId: openAiUser }
+]
+var accountAssignments = concat(deployerOpenAi, webOpenAi, [
   { principalId: functionPrincipalId, principalType: 'ServicePrincipal', roleId: openAiUser }
 ])
 

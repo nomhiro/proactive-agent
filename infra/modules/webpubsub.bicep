@@ -2,7 +2,8 @@
 param location string
 param tags object
 param resourceToken string
-param ownerPrincipalId string
+@description('Web PubSub Service Owner を付ける ID（Functions は合図の送信、Web アプリはクライアント用のトークンの発行）')
+param ownerPrincipalIds array
 
 var hub = 'proactive'
 
@@ -18,15 +19,15 @@ resource webPubSub 'Microsoft.SignalRService/webPubSub@2024-03-01' = {
 }
 
 // 12cf5a90-567b-43ae-8102-96cf46c7d9b4 = Web PubSub Service Owner
-resource owner 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource owner 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for principalId in ownerPrincipalIds: {
   scope: webPubSub
-  name: guid(webPubSub.id, ownerPrincipalId, 'webpubsub-owner')
+  name: guid(webPubSub.id, principalId, 'webpubsub-owner')
   properties: {
-    principalId: ownerPrincipalId
+    principalId: principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '12cf5a90-567b-43ae-8102-96cf46c7d9b4')
   }
-}
+}]
 
 output endpoint string = 'https://${webPubSub.properties.hostName}'
 output hub string = hub

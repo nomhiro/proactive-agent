@@ -1,4 +1,4 @@
-// proactive-agent の基盤一式（Plan 2、Plan 3 で Foundry を追加）。azd up で作る。
+// proactive-agent の基盤一式（Plan 2、Plan 3 で Foundry、Plan 4 で Web アプリを追加）。azd up で作る。
 targetScope = 'subscription'
 
 @minLength(1)
@@ -49,6 +49,13 @@ module identity 'modules/identity.bicep' = {
   params: { location: location, tags: tags, resourceToken: resourceToken }
 }
 
+// Web アプリ（BFF）の ID（Plan 4）
+module webIdentity 'modules/identity.bicep' = {
+  scope: rg
+  name: 'identity-web'
+  params: { location: location, tags: tags, resourceToken: resourceToken, prefix: 'web' }
+}
+
 module cosmos 'modules/cosmos.bicep' = {
   scope: rg
   name: 'cosmos'
@@ -57,8 +64,8 @@ module cosmos 'modules/cosmos.bicep' = {
     tags: tags
     resourceToken: resourceToken
     dataContributorPrincipalIds: empty(principalId)
-      ? [identity.outputs.principalId]
-      : [identity.outputs.principalId, principalId]
+      ? [identity.outputs.principalId, webIdentity.outputs.principalId]
+      : [identity.outputs.principalId, webIdentity.outputs.principalId, principalId]
   }
 }
 
@@ -69,7 +76,7 @@ module webPubSub 'modules/webpubsub.bicep' = {
     location: location
     tags: tags
     resourceToken: resourceToken
-    ownerPrincipalId: identity.outputs.principalId
+    ownerPrincipalIds: [identity.outputs.principalId, webIdentity.outputs.principalId]
   }
 }
 
@@ -88,6 +95,7 @@ module foundry 'modules/foundry.bicep' = {
     resourceToken: resourceToken
     deployerPrincipalId: principalId
     functionPrincipalId: identity.outputs.principalId
+    webPrincipalId: webIdentity.outputs.principalId
     modelName: modelName
     modelVersion: modelVersion
     modelCapacity: modelCapacity
@@ -120,6 +128,27 @@ module functions 'modules/functions.bicep' = {
   }
 }
 
+module web 'modules/web.bicep' = {
+  scope: rg
+  name: 'web'
+  params: {
+    location: location
+    tags: tags
+    resourceToken: resourceToken
+    environmentName: environmentName
+    identityId: webIdentity.outputs.id
+    identityClientId: webIdentity.outputs.clientId
+    identityPrincipalId: webIdentity.outputs.principalId
+    logAnalyticsId: monitoring.outputs.logAnalyticsId
+    cosmosEndpoint: cosmos.outputs.endpoint
+    cosmosDatabase: cosmos.outputs.databaseName
+    foundryProjectEndpoint: foundry.outputs.projectEndpoint
+    memoryStoreName: memoryStoreName
+    webPubSubEndpoint: webPubSub.outputs.endpoint
+    webPubSubHub: webPubSub.outputs.hub
+  }
+}
+
 output AZURE_LOCATION string = location
 output AZURE_TENANT_ID string = tenant().tenantId
 output AZURE_RESOURCE_GROUP string = rg.name
@@ -141,3 +170,6 @@ output MODEL_DEPLOYMENT string = foundry.outputs.modelDeployment
 output EMBEDDING_DEPLOYMENT string = foundry.outputs.embeddingDeployment
 output MEMORY_STORE_NAME string = memoryStoreName
 output APPLICATIONINSIGHTS_CONNECTION_STRING string = monitoring.outputs.appInsightsConnectionString
+output WEB_URL string = web.outputs.url
+output WEB_APP_NAME string = web.outputs.name
+output AZURE_CONTAINER_REGISTRY_ENDPOINT string = web.outputs.registryEndpoint
