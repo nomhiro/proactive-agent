@@ -20,7 +20,7 @@ from typing import Protocol
 from proactive_functions.store import Conflict, NotFound, Store
 from vehicle_core.clock import to_jst
 from vehicle_core.constants import JST, TEAM_LABELS_JA, VEHICLE_ID, Team, agent_name
-from vehicle_core.models import AgentMail, AgentRun, MailKind, Message, MessageRole
+from vehicle_core.models import AgentMail, AgentRun, MailKind, Message, MessageRole, Stance
 
 from .personas import Persona
 
@@ -91,7 +91,16 @@ def chat_prompt(message_id: str, persona: Persona, text: str, threads: list[Agen
     if not threads:
         return prompt
     head = ["", "このチームが関わる、エージェント間のスレッド（新しい順。発言がどれかへの返答なら、その thread_id を使う）:"]
-    return "\n".join([prompt, *head, *(_thread_line(m) for m in threads)])
+    lines = [prompt, *head, *(_thread_line(m) for m in threads)]
+    # 相手が「対応できない」と返したスレッド。こちらの人が譲らないと言ったのに、escalation でなく2つ目の下書きを作った
+    # （Azure 上での確認 5回目）
+    refused = next((m for m in threads if m.kind == MailKind.HUMAN_REPLY and m.stance == Stance.CANNOT
+                    and m.to_team == persona.team), None)
+    if refused:
+        lines.append(f"- 相手が {refused.thread_id} で「対応できない」と返している。この発言が、こちらも譲れないという意味なら、"
+                     "その thread_id で chief_engineer に escalation を send_mail で送る。同じ件の impact_notice の下書きは"
+                     "新しく作らない")
+    return "\n".join(lines)
 
 
 def run_id_for(message_id: str) -> str:

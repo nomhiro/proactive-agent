@@ -17,6 +17,7 @@ TRIGGER_LABELS = {
 }
 MORNING_TASKS = {"morning_digest", "morning_briefing"}
 MAX_MAIL_BODY = 1000
+MAX_IDS_PER_TEAM = 10
 
 
 def _impact_lines(req: InvestigationRequest) -> list[str]:
@@ -32,6 +33,10 @@ def _impact_lines(req: InvestigationRequest) -> list[str]:
     ]
     if imp.highlight_ids:
         lines.append(f"- 特に見るべきデータ: {', '.join(imp.highlight_ids)}")
+    # 件数だけだと、相手チームあての連絡やメッセージに、相手のどのデータかを書かなかった（Azure 上での確認 5回目）
+    for team, ids in sorted(imp.impacted_by_team.items()):
+        if team != req.team and ids:
+            lines.append(f"- {team.value} で影響を受けるデータ: {', '.join(ids[:MAX_IDS_PER_TEAM])}")
     return lines
 
 

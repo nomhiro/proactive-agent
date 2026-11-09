@@ -247,3 +247,19 @@ def test_begin_morning_digest_takes_over_stale_running_digest(store):  # 最終�
     assert store.get("agent_runs", run_id)["started_at"].startswith("2026-11-18T08:20")
     call(store, "finish_run", {"run_id": run_id, "summary": "s"}, now=morning + timedelta(minutes=21))
     assert call(store, "begin_morning_digest", {}, now=morning + timedelta(minutes=60)) == {"already_done": True}
+
+
+# --- Azure 上での確認 5回目: 「回生協調」の見張りを motor_torque で作った。値は正しいので断れない ---
+
+def test_streak_watch_returns_titles_of_watched_testcases(store):
+    out = call(store, "add_watch", {"kind": "test_failure_streak", "description": "回生協調の HILS 失敗はすぐ",
+                                    "delivery": "immediate", "feature": "motor_torque", "streak": 1,
+                                    "requested_by": "tanaka"})
+    assert out["watched_testcases"] == ["TC-HILS-012: モータートルク応答 HILS 試験"]
+    assert "remove_watch" in out["note"]
+
+
+def test_unknown_feature_error_shows_testcase_title_per_feature(store):
+    res = call_raw(store, "add_watch", {"kind": "test_failure_streak", "description": "d", "delivery": "immediate",
+                                        "feature": "回生協調", "streak": 1, "requested_by": "tanaka"})
+    assert "regen_coord（回生協調 HILS 試験 1 など）" in res["content"][0]["text"]

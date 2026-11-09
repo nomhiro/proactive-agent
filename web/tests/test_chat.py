@@ -111,6 +111,24 @@ def test_chat_prompt_lists_threads_the_team_is_in(store, service, client):
     assert "stance cannot" in lines[i2]
 
 
+
+def test_chat_prompt_points_to_escalation_after_other_side_said_cannot(store, service, client):
+    # Azure 上での確認 5回目: 田中が譲らないと言ったのに、escalation でなく2つ目の下書きを作った
+    store.create("agent_mail", _mail("am-1", "integrated_control", "motor_control", "impact_notice", -20))
+    store.create("agent_mail", _mail("am-2", "motor_control", "integrated_control", "human_reply", -10,
+                                     stance="cannot") | {"thread_id": "th-am-1"})
+    service.send(PERSONAS["tanaka"], "周期は戻せません")
+    line = next(ln for ln in client.prompts[-1][2].splitlines() if "escalation" in ln)
+    assert "th-am-1" in line and "chief_engineer" in line and "下書きは新しく作らない" in line
+
+
+def test_chat_prompt_has_no_escalation_line_for_the_side_that_said_cannot(store, service, client):
+    store.create("agent_mail", _mail("am-1", "integrated_control", "motor_control", "impact_notice", -20))
+    store.create("agent_mail", _mail("am-2", "motor_control", "integrated_control", "human_reply", -10,
+                                     stance="cannot") | {"thread_id": "th-am-1"})
+    service.send(PERSONAS["sato"], "やはり無理です")
+    assert "escalation を" not in client.prompts[-1][2]
+
 def test_chat_prompt_leaves_out_other_teams_future_and_analysis_mail(store, service, client):
     store.create("agent_mail", _mail("am-ev", "integrated_control", "evaluation", "impact_notice", -5))
     store.create("agent_mail", _mail("am-later", "integrated_control", "motor_control", "impact_notice", 30))

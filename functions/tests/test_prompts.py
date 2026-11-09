@@ -139,3 +139,12 @@ def test_prompt_lists_existing_drafts_and_says_not_to_make_another():
 
 def test_prompt_without_proposal_info_has_no_draft_line():
     assert "下書き" not in investigation_prompt(req_s1, "run-inv-abc", [])
+
+
+# --- Azure 上での確認 5回目: 提案つきのメッセージが、相手チームで影響を受けるデータの ID を書かなかった ---
+
+def test_prompt_lists_other_teams_impacted_ids():
+    p = investigation_prompt(req_s1, "run-inv-abc", [])  # 依頼はモーター制御。統合制御が相手
+    line = next(ln for ln in p.splitlines() if "integrated_control で影響を受けるデータ" in ln)
+    assert "SPEC-REGEN-01" in line
+    assert "motor_control で影響を受けるデータ" not in p

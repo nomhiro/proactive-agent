@@ -223,22 +223,36 @@ class AddWatchArgs(_Args):
     streak: int = 3
 
 
-def _known_features(ctx: ToolContext) -> list[str]:
-    """試験ケースの attributes.feature の値。試験結果の feature と同じ値で、見張りはこれと完全一致で比べる。"""
-    return sorted({f for d in ctx.store.query("artifacts") if (f := (d.get("attributes") or {}).get("feature"))})
+def _testcases_by_feature(ctx: ToolContext) -> dict[str, list[dict]]:
+    """試験ケースを attributes.feature の値でまとめる（ID 順）。試験結果の feature と同じ値で、見張りはこれと完全一致で比べる。"""
+    by_feature: dict[str, list[dict]] = {}
+    for d in sorted(ctx.store.query("artifacts"), key=lambda d: d["id"]):
+        if f := (d.get("attributes") or {}).get("feature"):
+            by_feature.setdefault(f, []).append(d)
+    return dict(sorted(by_feature.items()))
 
 
 def add_watch(ctx: ToolContext, args: dict) -> dict:
+    """試験の失敗の見張りは、見る試験ケースの題名を返す。値が正しくても、依頼と違う機能を選ぶことがあった
+    （Azure 上での確認 5回目: 「回生協調」の依頼で motor_torque）。"""
     a = AddWatchArgs.model_validate(args)
+    watched = []
     if a.kind == WatchKind.TEST_FAILURE_STREAK:
-        known = _known_features(ctx)
-        if a.feature not in known:
-            raise ToolError(f"feature は試験ケースの attributes.feature の値で指定してください（{', '.join(known)}）。"
+        by_feature = _testcases_by_feature(ctx)
+        if a.feature not in by_feature:
+            known = ", ".join(f"{f}（{cases[0].get('title', '')}{' など' if len(cases) > 1 else ''}）"
+                              for f, cases in by_feature.items())
+            raise ToolError(f"feature は試験ケースの attributes.feature の値で指定してください（{known}）。"
                             f"受け取った値: {a.feature}")
+        watched = [f"{d['id']}: {d.get('title', '')}" for d in by_feature[a.feature]]
     w = Watch(id=new_id("w"), team=ctx.team, kind=a.kind, description=a.description, target_ids=a.target_ids,
               feature=a.feature, streak=a.streak, delivery=a.delivery, created_by=a.requested_by,
               created_at=ctx.now)
-    return {"id": _save(ctx, "watches", w)["id"]}
+    out = {"id": _save(ctx, "watches", w)["id"]}
+    if watched:
+        out |= {"watched_testcases": watched,
+                "note": "見張る試験が依頼と違えば、remove_watch で消して、正しい feature で足し直す"}
+    return out
 
 
 class RemoveWatchArgs(_Args):
