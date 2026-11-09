@@ -1,0 +1,32 @@
+[project]
+name = "proactive-web"
+version = "0.1.0"
+description = "Web アプリ（BFF と画面）。会話・影響マップ・見張りと設定、承認、チャット、シナリオの再生"
+requires-python = ">=3.12"
+dependencies = [
+    "azure-ai-projects>=2.10",
+    "azure-identity>=1.19",
+    "azure-messaging-webpubsubservice>=1.2",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "proactive-functions",
+    "vehicle-core",
+]
+
+[tool.uv.sources]
+vehicle-core = { workspace = true }
+proactive-functions = { workspace = true }
+
+[dependency-groups]
+dev = ["pytest>=8", "httpx>=0.27"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["proactive_web"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
