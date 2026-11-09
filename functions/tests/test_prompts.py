@@ -2,7 +2,7 @@ from datetime import datetime
 
 from vehicle_core.constants import JST, Team
 from vehicle_core.impact import ImpactResult
-from vehicle_core.models import ChangeEvent, Classification, FieldChange, Schedule
+from vehicle_core.models import AgentMail, ChangeEvent, Classification, FieldChange, Schedule
 from vehicle_core.routing import InvestigationRequest
 
 from proactive_functions.prompts import investigation_prompt
@@ -81,3 +81,33 @@ def test_prompt_marks_editorial_only_change():
     p = investigation_prompt(req_s1, "run-inv-abc", [], [change("chg-001", "description", "目標原則度", "目標減速度")])
     assert "目標原則度" in p and "目標減速度" in p
     assert "題名や説明文だけの変更" in p
+
+
+# --- Azure 上での確認 2回目: 評価への解析の依頼が出ず、メールの中身も渡っていなかった ---
+
+def test_prompt_for_numeric_change_points_to_analysis_request():
+    p = investigation_prompt(req_s1, "run-inv-abc", [], [change("chg-001", "attributes.period_ms", 10, 20)])
+    assert "analysis_request" in p and "手順5" in p
+
+
+def test_prompt_for_numeric_change_in_evaluation_does_not_ask_itself():
+    req = req_s1.model_copy(update={"team": Team.EVALUATION})
+    p = investigation_prompt(req, "run-inv-abc", [], [change("chg-001", "attributes.period_ms", 10, 20)])
+    assert "analysis_request" not in p
+
+
+def test_prompt_for_text_or_flag_change_has_no_analysis_line():
+    for before, after in [("目標原則度", "目標減速度"), (True, False)]:
+        p = investigation_prompt(req_s1, "run-inv-abc", [], [change("chg-001", "attributes.x", before, after)])
+        assert "analysis_request" not in p
+
+
+def test_prompt_for_mail_shows_kind_thread_stance_and_body():
+    mail = AgentMail(id="am-1", thread_id="th-1", from_team=MC, to_team=IC, kind="human_reply",
+                     body="今週は v2.1 で手一杯です", stance="cannot", related_artifact_ids=["MDL-MotorTq"], created_at=T0)
+    req = req_s1.model_copy(update={"team": IC, "trigger": "mail", "source_ids": ["am-1"], "impact": None})
+    p = investigation_prompt(req, "run-inv-abc", [], mails=[mail])
+    assert "メールの中身:" in p
+    line = next(ln for ln in p.splitlines() if "am-1" in ln and "th-1" in ln)
+    assert "motor_control → integrated_control の human_reply" in line and "stance cannot" in line
+    assert "今週は v2.1 で手一杯です" in p

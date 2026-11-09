@@ -70,6 +70,18 @@ def test_invoke_puts_change_contents_in_prompt():  # シナリオテスト s0
     assert "attributes.period_ms" in fake.calls[1][2]
 
 
+def test_invoke_puts_mail_contents_in_prompt_and_skips_non_mail_ids():  # Azure 上での確認 2回目
+    store, fake = MemoryStore(), FakeResponses()
+    store.create("agent_mail", {"id": "am-9", "vehicle_id": VEHICLE_ID, "thread_id": "th-9",
+                                "from_team": "integrated_control", "to_team": "evaluation",
+                                "kind": "analysis_request", "body": "周期 20ms で応答を見たい",
+                                "created_at": NOW.isoformat()})
+    req = req_s1.model_copy(update={"trigger": "mail", "source_ids": ["am-9", "overdue:th-1"], "impact": None})
+    enqueue(store, [req])
+    FoundryInvoker(store, lambda t: fake, clock).invoke(req)
+    assert "周期 20ms で応答を見たい" in fake.calls[1][2] and "th-9" in fake.calls[1][2]
+
+
 def test_invoke_uses_team_agent():
     store, fake, asked = MemoryStore(), FakeResponses(), []
     enqueue(store, [req_s1])

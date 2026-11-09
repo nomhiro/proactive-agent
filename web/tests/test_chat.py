@@ -3,6 +3,7 @@ from datetime import timedelta
 import pytest
 from fastapi.testclient import TestClient
 from vehicle_core.constants import Team
+from vehicle_core.models import AgentMail
 
 from proactive_web.app import Deps, create_app
 from proactive_web.chat import ChatBusy, ChatFailed, ChatService, chat_prompt
@@ -84,6 +85,39 @@ def test_send_writes_human_message_starts_background_response_and_running_run(st
 def test_chat_prompt_format():
     assert chat_prompt("msg-1", PERSONAS["takahashi"], "状況は？") == \
         "チャット（発言 ID: msg-1）\n高橋（車種統括、チーフエンジニア）: 状況は？"
+
+
+def _mail(id_, frm, to, kind, minutes, **kw):
+    return AgentMail(id=id_, thread_id=f"th-{id_}", from_team=frm, to_team=to, kind=kind, body="本文",
+                     created_at=MORNING + timedelta(minutes=minutes), **kw).model_dump(mode="json")
+
+
+def test_chat_prompt_lists_threads_the_team_is_in(store, service, client):
+    # チャットの会話は調査の会話と別なので、どの連絡への返答かを書かないとエージェントが結びつけられない
+    # （Azure 上での確認 2回目: 佐藤の返答が human_reply にならなかった）
+    store.create("agent_mail", _mail("am-1", "integrated_control", "motor_control", "impact_notice", -20,
+                                     related_artifact_ids=["SIG-BrkPedalPos", "MDL-MotorTq"]))
+    store.create("agent_mail", _mail("am-2", "motor_control", "integrated_control", "human_reply", -10,
+                                     stance="cannot"))
+    service.send(PERSONAS["sato"], "無理です")
+    prompt = client.prompts[-1][2]
+    assert "このチームが関わる、エージェント間のスレッド" in prompt
+    lines = prompt.splitlines()
+    i2 = next(i for i, ln in enumerate(lines) if "am-2" in ln)
+    i1 = next(i for i, ln in enumerate(lines) if "am-1" in ln)
+    assert i2 < i1  # 新しい順
+    assert "th-am-1" in lines[i1] and "integrated_control → motor_control の impact_notice" in lines[i1]
+    assert "SIG-BrkPedalPos, MDL-MotorTq" in lines[i1]
+    assert "stance cannot" in lines[i2]
+
+
+def test_chat_prompt_leaves_out_other_teams_future_and_analysis_mail(store, service, client):
+    store.create("agent_mail", _mail("am-ev", "integrated_control", "evaluation", "impact_notice", -5))
+    store.create("agent_mail", _mail("am-later", "integrated_control", "motor_control", "impact_notice", 30))
+    store.create("agent_mail", _mail("am-an", "integrated_control", "motor_control", "analysis_request", -5))
+    service.send(PERSONAS["sato"], "状況は？")
+    prompt = client.prompts[-1][2]
+    assert "am-" not in prompt and "スレッド" not in prompt
 
 
 def test_conversation_is_created_once_per_team_and_saved(store, service, client):

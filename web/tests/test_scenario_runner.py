@@ -213,7 +213,8 @@ def test_human_says_step_sends_chat_as_person(store, runner, chat_client):
     runner.next()
     team, _, prompt = chat_client.prompts[-1]
     assert team.value == "motor_control"
-    assert prompt.endswith("佐藤（モーター制御、モータートルク制御の主担当）: 今週は v2.1 で手一杯で、R3 までに 20ms 対応は無理です")
+    assert prompt.splitlines()[1] == "佐藤（モーター制御、モータートルク制御の主担当）: 今週は v2.1 で手一杯で、R3 までに 20ms 対応は無理です"
+    assert "integrated_control → motor_control の impact_notice" in prompt  # 承認して届いた影響の連絡のスレッド
     assert vnow(store) == datetime(2026, 11, 18, 8, 40, tzinfo=JST)
 
 

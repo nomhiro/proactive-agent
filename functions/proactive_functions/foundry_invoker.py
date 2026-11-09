@@ -15,7 +15,7 @@ from typing import Protocol
 
 from vehicle_core.clock import crossed_morning, to_jst
 from vehicle_core.constants import VEHICLE_ID, Team, agent_name
-from vehicle_core.models import AgentRun, ChangeEvent, Schedule
+from vehicle_core.models import AgentMail, AgentRun, ChangeEvent, Schedule
 from vehicle_core.routing import InvestigationRequest
 
 from .docs import parse_each
@@ -86,9 +86,17 @@ class FoundryInvoker:
         docs = [d for d in (self.store.get("change_events", cid) for cid in request.source_ids) if d]
         return [c for _, c in parse_each(docs, ChangeEvent)]
 
+    def _mails(self, request: InvestigationRequest) -> list[AgentMail]:
+        if request.trigger != "mail":
+            return []
+        # source_ids には、返事の期限切れ（overdue:<thread_id>）のようにメールでない ID も入る。見つからなければ飛ばす
+        docs = [d for d in (self.store.get("agent_mail", mid) for mid in request.source_ids) if d]
+        return [m for _, m in parse_each(docs, AgentMail)]
+
     def invoke(self, request: InvestigationRequest) -> None:
         run_id = run_id_for(request.id)
-        prompt = investigation_prompt(request, run_id, self._schedules(request), self._changes(request))
+        prompt = investigation_prompt(request, run_id, self._schedules(request), self._changes(request),
+                                      self._mails(request))
         client = self.client_for(request.team)
         conversation_id = client.create_conversation()
         response_id = client.start_response(conversation_id, prompt)

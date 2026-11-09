@@ -20,7 +20,7 @@ from typing import Protocol
 from proactive_functions.store import Conflict, NotFound, Store
 from vehicle_core.clock import to_jst
 from vehicle_core.constants import JST, TEAM_LABELS_JA, VEHICLE_ID, Team, agent_name
-from vehicle_core.models import AgentRun, Message, MessageRole
+from vehicle_core.models import AgentMail, AgentRun, MailKind, Message, MessageRole
 
 from .personas import Persona
 
@@ -32,6 +32,8 @@ CLAIM_STALE = timedelta(minutes=2)
 CLAIM_CONTAINER = "system"
 FAILED_STATUSES = {"failed", "cancelled", "incomplete"}
 ASSISTANT_AUTHOR = "agent"  # MCP の post_message と同じ
+THREAD_KINDS = {MailKind.IMPACT_NOTICE, MailKind.HUMAN_REPLY, MailKind.ESCALATION}
+MAX_THREADS = 5
 
 
 class ChatBusy(Exception):
@@ -75,8 +77,21 @@ class FoundryChatClient:
         return str(r.status), (r.output_text or "")
 
 
-def chat_prompt(message_id: str, persona: Persona, text: str) -> str:
-    return f"チャット（発言 ID: {message_id}）\n{persona.name_ja}（{TEAM_LABELS_JA[persona.team]}、{persona.role}）: {text}"
+def _thread_line(m: AgentMail) -> str:
+    extra = [m.id] + ([f"stance {m.stance.value}"] if m.stance else [])
+    if m.related_artifact_ids:
+        extra.append(f"関係するデータ: {', '.join(m.related_artifact_ids)}")
+    return f"- {m.thread_id}: {m.from_team.value} → {m.to_team.value} の {m.kind.value}（{'、'.join(extra)}）"
+
+
+def chat_prompt(message_id: str, persona: Persona, text: str, threads: list[AgentMail] | None = None) -> str:
+    """threads は、そのチームが関わる影響の連絡のメール（新しい順）。チャットの会話は調査の会話と別なので、
+    人の発言がどの連絡への返答かを、エージェントが thread_id で結びつけられるように添える。"""
+    prompt = f"チャット（発言 ID: {message_id}）\n{persona.name_ja}（{TEAM_LABELS_JA[persona.team]}、{persona.role}）: {text}"
+    if not threads:
+        return prompt
+    head = ["", "このチームが関わる、エージェント間のスレッド（新しい順。発言がどれかへの返答なら、その thread_id を使う）:"]
+    return "\n".join([prompt, *head, *(_thread_line(m) for m in threads)])
 
 
 def run_id_for(message_id: str) -> str:
@@ -156,6 +171,17 @@ class ChatService:
                 continue  # ほかの読み直しが先に書いた。読み直して、そちらを使う
         raise ChatFailed("チャットの会話を用意できませんでした")
 
+    def _threads(self, team: Team, now: datetime) -> list[AgentMail]:
+        mails = []
+        for doc in self.store.query("agent_mail"):
+            try:
+                m = AgentMail.model_validate(doc)
+            except ValueError:
+                continue  # 壊れた1件で、チャットを止めない
+            if m.kind in THREAD_KINDS and team in (m.from_team, m.to_team) and m.created_at <= now:
+                mails.append(m)
+        return sorted(mails, key=lambda m: m.created_at, reverse=True)[:MAX_THREADS]
+
     def _message(self, id_: str, team: Team, role: MessageRole, author: str, text: str, now: datetime) -> None:
         m = Message(id=id_, team=team, role=role, author=author, text=text, created_at=now)
         try:
@@ -186,7 +212,8 @@ class ChatService:
         conversation_id = self._conversation(team)
         self._message(message_id, team, MessageRole.HUMAN, persona.id, text, now)
         try:
-            response_id = self.client.start_response(team, conversation_id, chat_prompt(message_id, persona, text))
+            prompt = chat_prompt(message_id, persona, text, self._threads(team, now))
+            response_id = self.client.start_response(team, conversation_id, prompt)
         except Exception as e:
             log.exception("chat start failed: %s", team)
             self._message(reply_id_for(message_id), team, MessageRole.SYSTEM, "system",
