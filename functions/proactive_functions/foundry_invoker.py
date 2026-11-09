@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from typing import Protocol
 
 from vehicle_core.clock import crossed_morning, to_jst
-from vehicle_core.constants import VEHICLE_ID, Team, agent_name
+from vehicle_core.constants import JST, VEHICLE_ID, Team, agent_name
 from vehicle_core.models import AgentMail, AgentRun, ChangeEvent, MailKind, Proposal, ProposalStatus, Schedule
 from vehicle_core.routing import InvestigationRequest
 
@@ -26,6 +26,9 @@ from .store import Conflict, NotFound, Store
 log = logging.getLogger(__name__)
 
 RECONCILE_AFTER = timedelta(minutes=2)
+# 実時間でこれを過ぎても in_progress / queued の応答は止まったとみなす。Foundry の応答が in_progress のまま
+# 2時間止まり、時計を進められなくなった（Azure 上での確認、画面）。仮想の時計は大きく跳ぶので実時間で測る
+RUN_TIMEOUT = timedelta(minutes=30)
 FAILED_STATUSES = {"failed", "cancelled", "incomplete"}
 LAST_TICK_CONTAINER = "system"
 LAST_TICK_ID = "last_tick"
@@ -35,6 +38,11 @@ class ResponsesClient(Protocol):
     def create_conversation(self) -> str: ...
     def start_response(self, conversation_id: str, prompt: str) -> str: ...
     def response_status(self, response_id: str) -> str: ...
+    def cancel_response(self, response_id: str) -> None: ...
+
+
+def _real_now() -> datetime:
+    return datetime.now(JST)
 
 
 class FoundryResponsesClient:
@@ -62,6 +70,9 @@ class FoundryResponsesClient:
     def response_status(self, response_id: str) -> str:
         return str(self._client().responses.retrieve(response_id).status)
 
+    def cancel_response(self, response_id: str) -> None:
+        self._client().responses.cancel(response_id)
+
 
 def run_id_for(request_id: str) -> str:
     return f"run-inv-{request_id}"
@@ -69,10 +80,11 @@ def run_id_for(request_id: str) -> str:
 
 class FoundryInvoker:
     def __init__(self, store: Store, client_for: Callable[[Team], ResponsesClient],
-                 clock: Callable[[], datetime]) -> None:
+                 clock: Callable[[], datetime], system_now: Callable[[], datetime] = _real_now) -> None:
         self.store = store
         self.client_for = client_for
         self._clock = clock
+        self._system_now = system_now
 
     def _schedules(self, request: InvestigationRequest) -> list[Schedule]:
         if request.trigger != "schedule":
@@ -119,7 +131,8 @@ class FoundryInvoker:
                 title=f"{TRIGGER_LABELS.get(request.trigger, request.trigger)}の調査"
                       + (f"（{request.origin_artifact_id}）" if request.origin_artifact_id else ""),
                 started_at=to_jst(self._clock()),
-                detail={"investigation_id": request.id, "trigger": request.trigger, **ids},
+                detail={"investigation_id": request.id, "trigger": request.trigger, **ids,
+                        "started_real_at": to_jst(self._system_now()).isoformat()},
             )
             self.store.upsert("agent_runs", run.model_dump(mode="json"))
         except Exception:  # noqa: BLE001
@@ -137,8 +150,15 @@ class FoundryInvoker:
                 continue
 
 
-def reconcile_runs(store: Store, client_for: Callable[[Team], ResponsesClient], now: datetime) -> list[str]:
-    """running のまま 2 分を過ぎた作業記録の応答を調べ、終わっていれば done にする（決定 11）。チャットの記録は飛ばす。"""
+def _timed_out(run: AgentRun, system_now: datetime) -> bool:
+    started = run.detail.get("started_real_at")
+    return bool(started) and system_now - datetime.fromisoformat(started) >= RUN_TIMEOUT
+
+
+def reconcile_runs(store: Store, client_for: Callable[[Team], ResponsesClient], now: datetime,
+                   system_now: Callable[[], datetime] = _real_now) -> list[str]:
+    """running のまま 2 分を過ぎた作業記録の応答を調べ、終わっていれば done にする（決定 11）。チャットの記録は飛ばす。
+    実時間で RUN_TIMEOUT を過ぎても終わらない応答は、取り消しを試みてから時間切れとして閉じる。"""
     now = to_jst(now)
     closed = []
     for doc, run in parse_each(store.query("agent_runs", {"state": "running"}), AgentRun):
@@ -156,6 +176,12 @@ def reconcile_runs(store: Store, client_for: Callable[[Team], ResponsesClient], 
             extra = {"error": status}
         elif status == "completed":
             extra = {"closed_by": "tick"}
+        elif _timed_out(run, system_now()):
+            try:
+                client_for(run.team).cancel_response(response_id)
+            except Exception:  # noqa: BLE001 — 取り消せなくても記録は閉じる。閉じないと時計を進められない
+                log.exception("response cancel failed: run=%s", run.id)
+            extra = {"error": "timeout", "status": status}
         else:
             continue
         done = doc | {"state": "done", "finished_at": now.isoformat(), "detail": {**run.detail, **extra}}

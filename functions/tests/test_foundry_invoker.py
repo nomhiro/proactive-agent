@@ -42,6 +42,11 @@ class FakeResponses:
         self.calls.append(("response_status", response_id))
         return self.statuses[response_id]
 
+    def cancel_response(self, response_id: str) -> None:
+        self.calls.append(("cancel_response", response_id))
+        if self.fail:
+            raise RuntimeError("cancel failed")
+
 
 def clock():
     return NOW
@@ -325,3 +330,49 @@ def test_morning_dispatch_when_setter_clock_is_ahead_of_functions():  # シナ�
     set_virtual_now(store, datetime(2026, 11, 18, 8, 0, tzinfo=JST), functions_real.now() + timedelta(seconds=0.5))
     functions_real.advance(timedelta(seconds=0.1))  # 書き込みの 0.1 秒後に tick が動く
     assert morning_dispatch_due(store, *StoredClock(store, functions_real).read()) is True
+
+
+
+# --- Azure 上での確認（画面）: 評価の解析の応答が Foundry で in_progress のまま2時間止まり、時計を進められなかった ---
+
+REAL = datetime(2026, 11, 9, 21, 0, tzinfo=JST)
+
+
+def test_invoke_records_real_start_time():
+    store, fake = MemoryStore(), FakeResponses()
+    enqueue(store, [req_s1])
+    FoundryInvoker(store, lambda t: fake, clock, system_now=lambda: REAL).invoke(req_s1)
+    assert store.get("agent_runs", f"run-inv-{req_s1.id}")["detail"]["started_real_at"] == REAL.isoformat()
+
+
+def _running_real(store, run_id, real_started, response_id):
+    running(store, run_id, NOW - timedelta(minutes=10), response_id=response_id)
+    doc = store.get("agent_runs", run_id)
+    store.upsert("agent_runs", doc | {"detail": doc["detail"] | {"started_real_at": real_started.isoformat()}})
+
+
+def test_reconcile_times_out_response_stuck_in_progress_by_real_time():
+    store = MemoryStore()
+    _running_real(store, "run-stuck", REAL - timedelta(minutes=31), "resp-s")
+    _running_real(store, "run-busy", REAL - timedelta(minutes=29), "resp-b")
+    fake = FakeResponses({"resp-s": "in_progress", "resp-b": "in_progress"})
+    assert reconcile_runs(store, lambda t: fake, NOW, system_now=lambda: REAL) == ["run-stuck"]
+    stuck = store.get("agent_runs", "run-stuck")
+    assert stuck["state"] == "done" and stuck["detail"]["error"] == "timeout"
+    assert ("cancel_response", "resp-s") in fake.calls and ("cancel_response", "resp-b") not in fake.calls
+    assert store.get("agent_runs", "run-busy")["state"] == "running"
+
+
+def test_reconcile_closes_timed_out_run_even_if_cancel_fails():
+    store = MemoryStore()
+    _running_real(store, "run-stuck", REAL - timedelta(hours=2), "resp-s")
+    fake = FakeResponses({"resp-s": "queued"}, fail=True)
+    assert reconcile_runs(store, lambda t: fake, NOW, system_now=lambda: REAL) == ["run-stuck"]
+
+
+def test_reconcile_does_not_time_out_run_without_real_start_time():
+    # 仮想の時計は大きく跳ぶので、仮想の経過時間では時間切れにしない
+    store = MemoryStore()
+    running(store, "run-old", NOW - timedelta(hours=10), response_id="resp-o")
+    fake = FakeResponses({"resp-o": "in_progress"})
+    assert reconcile_runs(store, lambda t: fake, NOW, system_now=lambda: REAL) == []
