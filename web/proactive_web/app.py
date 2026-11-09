@@ -68,6 +68,10 @@ class ChatBody(BaseModel):
     text: str
 
 
+class ClockBody(BaseModel):
+    at: str
+
+
 class SettingsBody(BaseModel):
     persona: str
     proactivity: Proactivity
@@ -208,6 +212,41 @@ def create_app(deps: Deps | None = None, *, static_dir: Path | None = None) -> F
             raise HTTPException(status_code=404, detail="ファイルがありません")
         data = deps.files.content(file_id)
         return Response(content=data, media_type=media_type(data), headers={"Cache-Control": "private, max-age=3600"})
+
+    def runner():
+        from .scenario_runner import ScenarioRunner
+        return ScenarioRunner(deps.store, deps.chat, system_now=deps.system_now)
+
+    @app.get("/api/admin/steps")
+    def admin_steps(_: str = Depends(user)) -> dict:
+        return {"steps": runner().steps(), "now": deps.clock.now().isoformat()}
+
+    @app.post("/api/admin/next")
+    def admin_next(_: str = Depends(user)) -> dict:
+        from .scenario_runner import StepNotReady
+        try:
+            return runner().next()
+        except StepNotReady as e:
+            raise HTTPException(status_code=409, detail=e.reason) from None
+        except DecisionError as e:
+            raise HTTPException(status_code=e.status, detail=e.reason) from None
+
+    @app.post("/api/admin/reset")
+    def admin_reset(_: str = Depends(user)) -> dict:
+        runner().reset()
+        return {"ok": True}
+
+    @app.post("/api/admin/clock")
+    def admin_clock(body: ClockBody, _: str = Depends(user)) -> dict:
+        from proactive_functions.clock import set_virtual_now
+        try:
+            at = datetime.fromisoformat(body.at)
+            if at.tzinfo is None:
+                raise ValueError
+        except ValueError:
+            raise HTTPException(status_code=422, detail="タイムゾーン付きの ISO 8601 で指定してください") from None
+        set_virtual_now(deps.store, at, deps.system_now())
+        return {"now": deps.clock.now().isoformat()}
 
     # --- ここより上に /api のルートを足す。画面の配信は最後に置く --------------------------
 

@@ -92,7 +92,8 @@ class ChatService:
         where = {"state": "running"} | ({"team": team.value} if team else {})
         return [r for r in self.store.query("agent_runs", where) if (r.get("detail") or {}).get("kind") == "chat"]
 
-    def busy(self, team: Team) -> bool:
+    def busy(self, team: Team | None) -> bool:
+        """team が None なら、どのチームでも返事待ちがあるか。"""
         return bool(self._running(team))
 
     def _conversation(self, team: Team) -> str:
