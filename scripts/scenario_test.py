@@ -31,6 +31,7 @@ from proactive_web.scenario_runner import ScenarioRunner, StepNotReady  # noqa: 
 POLL = 5.0
 STEP_READY_LIMIT = 600.0  # 時計の手順は、メールから起きる調査まで終わるのを待つ
 DUPLICATE_WAIT = 90.0
+SETTLE_GAP = 70.0
 REDISPATCH_WAIT = 120.0
 IC = Team.INTEGRATED_CONTROL.value
 results: list[tuple[str, bool, str]] = []
@@ -72,13 +73,33 @@ def apply_step(runner: ScenarioRunner, chat: ChatService) -> dict | None:
             time.sleep(POLL)
 
 
+def _busy(store) -> bool:
+    pending = store.query("investigations", {"status": "pending"})
+    return bool(pending) or any(r.get("state") == "running" for r in store.query("agent_runs"))
+
+
+def wait_settled(store, chat: ChatService) -> None:
+    """調査とメールの連鎖（解析の依頼 → 結果 → 統合制御の2つ目の調査）が落ち着くまで待つ。
+
+    tick は1分ごとなので、手の空いた状態が SETTLE_GAP をはさんで2回続けて見えたら落ち着いたとみなす。
+    待たずに数えると、連鎖から生まれた通知を「同じ変更イベントで増えた」と取り違える（Azure 上での確認 3回目）。
+    """
+    deadline = time.monotonic() + STEP_READY_LIMIT
+    quiet = 0
+    while quiet < 2 and time.monotonic() < deadline:
+        chat.sync()
+        quiet = 0 if _busy(store) else quiet + 1
+        time.sleep(SETTLE_GAP if quiet else POLL)
+
+
 def check_no_duplicate(store, chat: ChatService) -> None:
     """同じ変更イベントをもう一度流しても、調査依頼と通知が増えない（設計書 9 節）。"""
     event = SCENARIOS["s1_signal_period"].steps[0].change
+    wait_settled(store, chat)
     before = (len(store.query("investigations", {"team": IC})), len(store.query("notifications", {"team": IC})))
     store.upsert("change_events", event.model_dump(mode="json"))
     time.sleep(DUPLICATE_WAIT)
-    chat.sync()
+    wait_settled(store, chat)
     after = (len(store.query("investigations", {"team": IC})), len(store.query("notifications", {"team": IC})))
     record("同じ変更イベントを2回流しても、調査依頼と通知が増えない", before == after, f"（前 {before} → 後 {after}）")
 

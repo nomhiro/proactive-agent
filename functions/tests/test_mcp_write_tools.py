@@ -55,6 +55,42 @@ def test_post_message_keeps_attachments(store):
     assert store.get("messages", out["id"])["attachments"] == ["foundry-file:assistant-abc"]
 
 
+# --- Azure 上での確認 3回目: 夜の調査が notification_id を付けずに書き、田中の画面にすぐ出た ---
+
+def test_post_message_at_night_without_notification_id_follows_held_notification(store):
+    n = call(store, "record_notification", {"classification": "notify_now", "reason": "R3 に響く",
+                                            "origin_artifact_id": SIGNAL_ID})
+    out = call(store, "post_message", {"text": "下書きを作りました", "proposal_id": "prop-1"},
+               now=NIGHT + timedelta(minutes=1))
+    assert store.get("messages", out["id"])["notification_id"] == n["id"]
+
+
+def test_post_message_does_not_follow_delivered_silent_or_old_notification(store):
+    call(store, "record_notification", {"classification": "notify_now", "reason": "昼", "origin_artifact_id": SIGNAL_ID},
+         now=DAY)  # 昼の notify_now はすぐ届く
+    call(store, "record_notification", {"classification": "silent", "reason": "静か", "origin_artifact_id": SIGNAL_ID},
+         now=DAY)
+    call(store, "record_notification", {"classification": "digest", "reason": "朝に", "origin_artifact_id": SIGNAL_ID},
+         now=DAY)  # 朝のまとめ行き。朝のまとめのメッセージまで翌日に回さない
+    out = call(store, "post_message", {"text": "昼の話"}, now=DAY + timedelta(minutes=1))
+    assert store.get("messages", out["id"])["notification_id"] is None
+    call(store, "record_notification", {"classification": "notify_now", "reason": "夜", "origin_artifact_id": SIGNAL_ID})
+    late = call(store, "post_message", {"text": "かなり後"}, now=NIGHT + timedelta(minutes=31))
+    assert store.get("messages", late["id"])["notification_id"] is None
+
+
+def test_post_message_keeps_notification_id_given_by_agent(store):
+    call(store, "record_notification", {"classification": "notify_now", "reason": "夜", "origin_artifact_id": SIGNAL_ID})
+    out = call(store, "post_message", {"text": "x", "notification_id": "ntf-given"})
+    assert store.get("messages", out["id"])["notification_id"] == "ntf-given"
+
+
+def test_create_proposal_to_own_team_is_error(store):
+    res = call_raw(store, "create_proposal", {"kind": "impact_notice", "to_teams": ["integrated_control"], "draft": "d"})
+    assert res["isError"] is True and "自チーム" in res["content"][0]["text"]
+    assert store.query("proposals") == []
+
+
 def test_send_mail_rejects_impact_notice(store):
     res = call_raw(store, "send_mail", {"to_team": "motor_control", "kind": "impact_notice", "body": "影響あり"})
     assert res["isError"] is True

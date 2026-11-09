@@ -23,6 +23,7 @@ from .context import ToolContext, ToolError
 from .protocol import Registry, Tool
 
 ASSISTANT_AUTHOR = "agent"
+HELD_FOLLOW_WINDOW = timedelta(minutes=30)
 
 
 def new_id(prefix: str) -> str:
@@ -49,10 +50,30 @@ class PostMessageArgs(_Args):
     attachments: list[str] = []
 
 
+def _held_notification_id(ctx: ToolContext) -> str | None:
+    """このチームが直前に記録し、まだ届けていない notify_now の通知（静かな時間帯で翌朝まで保留されたもの）。
+
+    調査のメッセージは通知と同じときに届くはずだが、エージェントが notification_id を渡し忘れると、夜でもすぐ
+    画面に出てしまう（Azure 上での確認 3回目）。渡されなかったときは、この通知に結びつけて保留する。
+    """
+    held = []
+    for doc in ctx.store.query("notifications", {"team": ctx.team.value}):
+        try:
+            n = Notification.model_validate(doc)
+        except ValueError:
+            continue
+        if (n.classification == Classification.NOTIFY_NOW and n.delivered_at is None
+                and n.deliver_at is not None and n.deliver_at > ctx.now
+                and ctx.now - n.created_at <= HELD_FOLLOW_WINDOW):
+            held.append(n)
+    return max(held, key=lambda n: n.created_at).id if held else None
+
+
 def post_message(ctx: ToolContext, args: dict) -> dict:
     a = PostMessageArgs.model_validate(args)
+    notification_id = a.notification_id or _held_notification_id(ctx)
     m = Message(id=new_id("msg"), team=ctx.team, role=MessageRole.ASSISTANT, author=ASSISTANT_AUTHOR, text=a.text,
-                notification_id=a.notification_id, proposal_id=a.proposal_id, attachments=a.attachments,
+                notification_id=notification_id, proposal_id=a.proposal_id, attachments=a.attachments,
                 created_at=ctx.now)
     return {"id": _save(ctx, "messages", m)["id"]}
 
@@ -67,6 +88,8 @@ class CreateProposalArgs(_Args):
 
 def create_proposal(ctx: ToolContext, args: dict) -> dict:
     a = CreateProposalArgs.model_validate(args)
+    if ctx.team in a.to_teams:
+        raise ToolError("自チームあての下書きは作れません。自チームの人には post_message で伝えてください")
     p = Proposal(id=new_id("prop"), team=ctx.team, kind=a.kind, to_teams=a.to_teams, draft=a.draft,
                  related_artifact_ids=a.related_artifact_ids, thread_id=a.thread_id or new_id("th"),
                  created_at=ctx.now)
