@@ -58,11 +58,12 @@
 14. **マップの光り方**（画面の側）: メッセージを選ぶと、その通知の起点を塗りつぶし、`impacted_ids` を赤枠、`highlight_ids` のほかのノードを通常、残りを薄くする。`cross_team_edges` の辺は赤い点線、ほかの辺は薄くする。何も選んでいなければ、チームの画面では自チームの領域を濃く、ほかを中くらいに、高橋の画面では全体を同じ濃さにする。領域は折りたためる
 15. **グラフ**: `GET /api/files/{file_id}?persona=` は、その人物のチームで見せてよいメッセージの添付に `foundry-file:<file_id>` があるときだけ、プロジェクトの OpenAI クライアント（`project.get_openai_client().files.content(file_id)`）で取って返す。ないときは 404。PNG なら `image/png`
 16. **画面への合図**: `GET /api/negotiate?persona=` が Web PubSub のクライアント用 URL を返す。参加するグループは人物のチーム（高橋は全チームの値）。BFF が `get_client_access_token(groups=…)` でグループを決める（画面に参加の操作をさせない）。Web PubSub が設定されていないローカルでは `{"url": null}` を返し、画面は読み直しの間隔だけで動く
-17. **シナリオの再生**: `SCENARIO_ORDER` の全シナリオの手順を1列に並べ、`system` コンテナの文書 `scenario_progress`（`{"id", "vehicle_id", "next_index"}`）で次の手を覚える。「次へ」は、前提を確かめる → 仮想の時刻が手順の `at` より前なら時計を `at` に進める（戻さない）→ 手順を行う → `next_index` を進める、の順。前提が揃っていなければ（承認待ちの提案がない、チャットの返事待ち）、時計も進み具合も変えずに `StepNotReady`（理由つき、HTTP 409）。作り直し（`seed_store(reset=True)`）で `system` ごと消えるので、進み具合も最初に戻る
+17. **シナリオの再生**: `SCENARIO_ORDER` の全シナリオの手順を1列に並べ、`system` コンテナの文書 `scenario_progress`（`{"id", "vehicle_id", "next_index"}`）で次の手を覚える。「次へ」は、前提を確かめる → 仮想の時刻が手順の `at` より前なら時計を `at` に進める（戻さない）→ 手順を行う → `next_index` を進める、の順。前提が揃っていなければ（承認待ちの提案がない、チャットの返事待ち、時計の手順なのに調査が終わっていない）、時計も進み具合も変えずに `StepNotReady`（理由つき、HTTP 409）。時計の手順（`SET_CLOCK`）の前提は、`investigations` に `status: pending` がなく、`agent_runs` に `detail.kind != "chat"` の `running` がないこと（理由「調査が終わっていません（<ID>）」）。夜の調査が終わる前に朝へ進めると、エージェントが昼の時刻で通知を記録し、朝まで保留する筋書きが崩れるため。作り直し（`seed_store(reset=True)`）で `system` ごと消えるので、進み具合も最初に戻る
 18. **シナリオ1の承認**: `StepKind.APPROVE`（`team`、`person_id` を持つ）を足し、s1 の手順に「11/18 08:20 田中が承認待ちの影響の連絡を送る」を、時計を 8:00 に進める手順と佐藤の発言のあいだに入れる。承認するのは、そのチームの `pending` の `impact_notice` のうち最も古いもの
 19. **変更の手順**: `change_events` に変更を新規作成し（既にあれば飛ばす）、`artifacts` の該当データにも変更後の値を書く（`apply_changes`。`path` は `attributes.period_ms` のような `.` 区切り。`updated_at` は手順の時刻）。Functions は `artifacts` を書き換えない（Plan 2 の申し送り）
 20. **ローカルでの確認**: `WEB_STORE=memory`、`WEB_AUTH=off` のとき、BFF はメモリーの Store にシードと「シナリオ1の朝」の状態（配達済みの通知、承認待ちの提案、提案つきのメッセージ）を入れ、チャットは決まった返事を返す偽物で動く。画面の確かめはこれで行う
 21. **エージェントの指示文の追加**: 4体に「チャットで話しかけられたとき」、3チームに「チーフエンジニアに判断を仰ぐとき」を足す（Task 4 に文面）。設計書 5.3 節のシナリオ1の手順 6 で、統合制御のアシスタントが escalation を送るのに要る
+22. **通知とメッセージを必ず結びつける**: 保留と非表示（決定 9、11、Plan 2 の `_held`）は、エージェントが `record_notification` を先に呼び、返った ID を `post_message` の `notification_id` に渡すことに依っている。investigate スキルの手順 8 を「通知を記録した調査で話しかけるときは、必ずその notification_id を渡す」に強め、統括の指示文の「判断が必要なことを上げるとき」を「`record_notification` で記録してから、その ID を付けて `post_message`」の順に直す（今は逆で、高橋の「判断が必要なこと」が空になる）
 
 ## Review Focus
 
@@ -71,6 +72,7 @@
 3. **返事を書いている途中にチャットを送る** → 409 で、エージェントへの応答は1つしか起動しない。テストは Task 4
 4. **夜間に記録された通知とそのメッセージ**（`delivered_at` が空）→ `/api/state` に出ない。配達されたら出る。テストは Task 2
 5. **前提が揃う前にシナリオの「次へ」を押す**（承認待ちの提案がまだない）→ 409 と理由を返し、時計も進み具合も変えない。テストは Task 5
+6. **夜の調査が終わる前に「次へ」を続けて押して朝へ進める** → 409「調査が終わっていません」で、時計は 21:10 のまま。テストは Task 5
 
 ---
 
@@ -391,7 +393,7 @@ def test_file_is_served_only_when_attached_to_visible_message(): ...       # 添
 **Files:**
 - Create: `web/proactive_web/chat.py`、`web/tests/test_chat.py`
 - Modify: `web/proactive_web/app.py`（`POST /api/chat`、`/api/state` で `sync`）
-- Modify: `agents/instructions/{chief_engineer,integrated_control,motor_control,evaluation}.md`、`deploy/tests/test_agent_content.py`
+- Modify: `agents/instructions/{chief_engineer,integrated_control,motor_control,evaluation}.md`、`agents/skills/investigate/SKILL.md`、`deploy/tests/test_agent_content.py`
 
 **Interfaces:**
 - Produces: `chat.AgentChatClient` プロトコル: `create_conversation(team: Team) -> str`、`start_response(team: Team, conversation_id: str, prompt: str) -> str`、`get_response(team: Team, response_id: str) -> tuple[str, str]`（状態、`output_text`）
@@ -451,7 +453,16 @@ def test_team_instructions_explain_escalation():
     for team in AGENT_TEAMS - {Team.CHIEF_ENGINEER}:
         text = instruction(team)
         assert "## チーフエンジニアに判断を仰ぐとき" in text and "escalation" in text
+
+def test_messages_are_linked_to_recorded_notifications():  # 決定 22
+    skill = skill_text("investigate")
+    assert "必ずその notification_id を渡す" in skill
+    chief = instruction(Team.CHIEF_ENGINEER)
+    section = chief.split("## 判断が必要なことを上げるとき")[1].split("##")[0]
+    assert section.index("record_notification") < section.index("post_message")
 ```
+
+（`instruction`、`skill_text` は既存のテストの補助を使う。名前が違えば合わせる）
 
 - [ ] **Step 2: 失敗を確かめる** — Run: `cd web && uv run pytest -q tests/test_chat.py` と `cd deploy && uv run pytest -q tests/test_agent_content.py` / Expected: FAIL
 
@@ -470,6 +481,8 @@ def test_team_instructions_explain_escalation():
     - 人の返答を他チームに届けるとき（`send_mail` の種類 human_reply）は、`source_message_id` に発言 ID を、`body` に本文をそのまま（「名前（…）:」を除いて）入れる
     - 返事は短く、データの ID を添える
     ```
+  - investigate スキルの手順 8 を次にする: 「8. チームに話しかける場合は `post_message` で書く。通知を記録した調査で話しかけるときは、必ずその notification_id を渡す（渡さないと、静かな時間帯でもすぐ画面に出てしまう）。下書きと結びつけるときは proposal_id も渡す」
+  - 統括の指示文の「判断が必要なことを上げるとき」の2文目を次にする: 「`record_notification` で notify_now として記録し、返った ID を notification_id に付けて、次の形で `post_message` に書く。」
   - 3チームの指示文の「統括から尋ねられたとき」の前に次の節を足す
 
     ```markdown
@@ -517,6 +530,17 @@ def test_approve_step_without_pending_proposal_is_not_ready_and_changes_nothing(
         runner.next()
     assert store.get("system", "clock")["offset_seconds"] == clock_before
     assert runner.steps()[2]["done"] is False
+
+def test_clock_step_waits_for_running_investigation():  # Review Focus 6
+    runner.next()  # 21:10 の変更
+    store.create("agent_runs", run_doc("run-inv-x", state="running", detail={"investigation_id": "x"}))
+    with pytest.raises(StepNotReady, match="調査が終わっていません"):
+        runner.next()
+    assert StoredClock(store, FixedSystem(REAL)).now() == datetime(2026, 11, 17, 21, 10, tzinfo=JST)
+    store.upsert("agent_runs", store.get("agent_runs", "run-inv-x") | {"state": "done"})
+    runner.next()  # 終われば進める
+
+def test_clock_step_waits_for_pending_investigation_but_not_for_chat_runs(): ...
 
 def test_approve_step_approves_oldest_pending_impact_notice_as_tanaka(): ...
 def test_human_says_step_sends_chat_as_person(): ...      # FakeChatClient のプロンプトに「佐藤（モーター制御、…）: 今週は…」
@@ -696,7 +720,7 @@ def test_message_mentions_ids_checks_text(): ...                   # 「SIG-BrkP
 - [ ] **Step 1: 制作者に確認してから `azd up`** — `proactive-dev` に反映する（デモのデータが作り直され、モデルの費用が少しかかる）。Expected: 成功。初回は Web の ID のロールが効くまで BFF が 403 を返すことがある。数分待っても続くなら原因を調べる
 - [ ] **Step 2: 画面を確かめる** — `WEB_URL` をブラウザで開き、制作者の Entra アカウントでサインインする（サインインは制作者が行う）。人物の切り替え、マップ、デモの操作の手順の一覧が出ることを確かめる。サインインしていない別のブラウザからは、サインインの画面に飛ばされることを確かめる
 - [ ] **Step 3: 既存のスモークテスト** — Run: `uv run --package proactive-functions python scripts/smoke.py` / Expected: `SMOKE OK`
-- [ ] **Step 4: シナリオテスト** — Run: `uv run --package proactive-web python scripts/scenario_test.py` / Expected: すべて OK。NG があれば、エージェントの指示文の問題か、コードの問題かを切り分ける。コードは TDD で直し、指示文は直してフックを流し直す。それでも LLM の判断で揺れるものは、何回に何回通ったかを記録する
+- [ ] **Step 4: シナリオテスト** — Run: `uv run --package proactive-web python scripts/scenario_test.py` / Expected: すべて OK。NG があれば、エージェントの指示文の問題か、コードの問題かを切り分ける。コードは TDD で直し、指示文は直してフックを流し直す。それでも LLM の判断で揺れるものは、何回に何回通ったかを記録する。s1#3 の human_reply が書けないときは、まず MCP サーバーの拒否「人の返事の本文は、元の発言と同じでなければなりません」を疑う（エージェントが句読点や空白を変えた。ゲートウェイの検査は緩めず、指示文で直す）
 - [ ] **Step 5: 画面でシナリオ1を通して見る** — デモの操作で最初からやり直し、「次へ」でシナリオ1を進め、田中・佐藤・高橋の画面の見え方を確かめる（グラフの表示を含む）
 - [ ] **Step 6: README を直す**
   - 「状態」を「Plan 4 まで実装済み」に
