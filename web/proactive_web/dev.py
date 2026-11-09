@@ -20,6 +20,23 @@ NIGHT = datetime(2026, 11, 17, 21, 25, tzinfo=JST)
 MORNING = datetime(2026, 11, 18, 8, 0, tzinfo=JST)
 
 
+class LocalChatClient:
+    """すぐに completed になり、決まった返事を返す偽物（Azure に触れない）。"""
+
+    def __init__(self) -> None:
+        self._count = 0
+
+    def create_conversation(self, team) -> str:
+        return f"conv-local-{team}"
+
+    def start_response(self, team, conversation_id: str, prompt: str) -> str:
+        self._count += 1
+        return f"resp-local-{self._count}"
+
+    def get_response(self, team, response_id: str) -> tuple[str, str]:
+        return "completed", "（ローカルの確認用の返事です）"
+
+
 class StaticMemory:
     def __init__(self, items: dict[str, list[dict]]) -> None:
         self._items = items
@@ -78,7 +95,10 @@ def dev_deps(auth_mode: str = "off"):
     from .app import Deps
     store = dev_store()
     memory = StaticMemory({"integrated_control": [{"id": "mem-dev-1", "text": "連絡は朝まとめてほしい（急ぎでないもの）"}]})
-    return Deps(store=store, clock=StoredClock(store), memory=memory, auth_mode=auth_mode)
+    from .chat import ChatService
+    clock = StoredClock(store)
+    return Deps(store=store, clock=clock, memory=memory, chat=ChatService(store, LocalChatClient(), clock.now),
+                auth_mode=auth_mode)
 
 
 def main() -> None:

@@ -19,6 +19,7 @@ from vehicle_core.constants import JST, Team
 from vehicle_core.models import Artifact, Proactivity
 
 from .auth import current_user
+from .chat import ChatBusy, ChatFailed
 from .files import allowed_file_ids, media_type
 from .map_layout import build_map
 from .personas import PERSONAS, Persona, persona_or_400
@@ -62,6 +63,11 @@ class DecisionBody(BaseModel):
     draft: str | None = None
 
 
+class ChatBody(BaseModel):
+    persona: str
+    text: str
+
+
 class SettingsBody(BaseModel):
     persona: str
     proactivity: Proactivity
@@ -101,7 +107,11 @@ def deps_from_settings() -> Deps:
     realtime = (WebPubSubUrls(s.webpubsub_endpoint, s.webpubsub_hub, credential) if s.webpubsub_endpoint
                 else NoRealtime())
     files = FoundryFiles(s.foundry_project_endpoint, credential) if s.foundry_project_endpoint else None
-    return Deps(store=store, clock=StoredClock(store), memory=memory, realtime=realtime, files=files,
+    from .chat import ChatService, FoundryChatClient
+    clock = StoredClock(store)
+    chat = (ChatService(store, FoundryChatClient(s.foundry_project_endpoint, credential), clock.now)
+            if s.foundry_project_endpoint else None)
+    return Deps(store=store, clock=clock, memory=memory, chat=chat, realtime=realtime, files=files,
                 auth_mode=s.auth)
 
 
@@ -135,7 +145,26 @@ def create_app(deps: Deps | None = None, *, static_dir: Path | None = None) -> F
 
     @app.get("/api/state")
     def state(_: str = Depends(user), p: Persona = Depends(persona)) -> dict:
+        if deps.chat is not None and deps.chat.busy(p.team):
+            try:
+                deps.chat.sync(p.team)  # チャットの返事を受け取る（決定 4）
+            except Exception:  # noqa: BLE001 — 受け取れなくても画面は出す
+                log.exception("chat sync failed: %s", p.team)
         return build_state(deps.store, p, deps.clock.now(), memories(p.team.value))
+
+    @app.post("/api/chat")
+    def chat(body: ChatBody, _: str = Depends(user)) -> dict:
+        p = persona_or_400(body.persona)
+        if deps.chat is None:
+            raise HTTPException(status_code=503, detail="チャットは設定されていません")
+        try:
+            return {"message_id": deps.chat.send(p, body.text)}
+        except ChatBusy as e:
+            raise HTTPException(status_code=409, detail=str(e)) from None
+        except ChatFailed as e:
+            raise HTTPException(status_code=502, detail=str(e)) from None
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from None
 
     @app.get("/api/map")
     def map_(_: str = Depends(user)) -> dict:

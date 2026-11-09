@@ -14,7 +14,7 @@ description: 変更、試験結果、メール、定時の仕事をきっかけ�
 5. 数値で確かめる必要があれば、評価チームのアシスタントに `send_mail` で `analysis_request` を送る（評価チームは自分で analysis スキルを使う）
 6. 知らせるかどうかを notify-decision スキルで決め、`record_notification` で記録する
 7. 他チームのデータに影響があれば、drafting スキルに沿って `create_proposal` で `impact_notice` の下書きを作る
-8. チームに話しかける場合は `post_message` で書く。通知や下書きと結びつけるときは notification_id や proposal_id を渡す
+8. チームに話しかける場合は `post_message` で書く。通知を記録した調査で話しかけるときは、必ずその notification_id を渡す（渡さないと、静かな時間帯でもすぐ画面に出てしまう）。下書きと結びつけるときは proposal_id も渡す
 9. 最後に `finish_run` を run_id と要約で呼ぶ。要約には、結論、分類とその理由、作った通知や下書きの ID を書く
 
 途中で失敗した道具があっても、わかったことまでを要約に書いて `finish_run` で閉じる。閉じないと、画面の「いま」に残り続ける。
