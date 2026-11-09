@@ -9,18 +9,21 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse
-from proactive_functions.store import Store
-from vehicle_core.constants import JST
-from vehicle_core.models import Artifact
+from fastapi.responses import FileResponse, Response
+from proactive_functions.store import Conflict, NotFound, Store
+from pydantic import BaseModel
+from vehicle_core.constants import JST, Team
+from vehicle_core.models import Artifact, Proactivity
 
 from .auth import current_user
+from .files import allowed_file_ids, media_type
 from .map_layout import build_map
 from .personas import PERSONAS, Persona, persona_or_400
-from .views import build_state
+from .proposals import DecisionError, decide_proposal
+from .views import build_state, clean, visible_messages
 
 log = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -53,6 +56,17 @@ class FoundryMemoryReader:
         return [{"id": m.id, "text": m.text} for m in self._backend.search(team, None)]
 
 
+class DecisionBody(BaseModel):
+    persona: str
+    action: Literal["approve", "reject"]
+    draft: str | None = None
+
+
+class SettingsBody(BaseModel):
+    persona: str
+    proactivity: Proactivity
+
+
 def _real_now() -> datetime:
     return datetime.now(JST)
 
@@ -82,7 +96,13 @@ def deps_from_settings() -> Deps:
     store = CosmosStore(s.cosmos_endpoint, s.cosmos_database, credential)
     memory = (FoundryMemoryReader(s.foundry_project_endpoint, credential, s.memory_store_name)
               if s.foundry_project_endpoint and s.memory_store_name else None)
-    return Deps(store=store, clock=StoredClock(store), memory=memory, auth_mode=s.auth)
+    from .files import FoundryFiles
+    from .realtime import NoRealtime, WebPubSubUrls
+    realtime = (WebPubSubUrls(s.webpubsub_endpoint, s.webpubsub_hub, credential) if s.webpubsub_endpoint
+                else NoRealtime())
+    files = FoundryFiles(s.foundry_project_endpoint, credential) if s.foundry_project_endpoint else None
+    return Deps(store=store, clock=StoredClock(store), memory=memory, realtime=realtime, files=files,
+                auth_mode=s.auth)
 
 
 def create_app(deps: Deps | None = None, *, static_dir: Path | None = None) -> FastAPI:
@@ -121,6 +141,44 @@ def create_app(deps: Deps | None = None, *, static_dir: Path | None = None) -> F
     def map_(_: str = Depends(user)) -> dict:
         artifacts = [Artifact.model_validate(a) for a in deps.store.query("artifacts")]
         return build_map(artifacts)
+
+    @app.post("/api/proposals/{proposal_id}/decision")
+    def decision(proposal_id: str, body: DecisionBody, _: str = Depends(user)) -> dict:
+        p = persona_or_400(body.persona)
+        try:
+            return clean(decide_proposal(deps.store, proposal_id, p, body.action, body.draft, deps.clock.now()))
+        except DecisionError as e:
+            raise HTTPException(status_code=e.status, detail=e.reason) from None
+
+    @app.put("/api/settings")
+    def settings(body: SettingsBody, _: str = Depends(user)) -> dict:
+        p = persona_or_400(body.persona)
+        doc_id = f"ts-{p.team.value}"
+        for _attempt in range(3):
+            doc = deps.store.get("team_settings", doc_id)
+            if doc is None:
+                raise HTTPException(status_code=404, detail="チームの設定がありません")
+            try:
+                saved = deps.store.replace("team_settings", doc | {"proactivity": body.proactivity.value},
+                                           etag=doc["_etag"])
+                return {"proactivity": saved["proactivity"]}
+            except (Conflict, NotFound):
+                continue
+        raise HTTPException(status_code=409, detail="ほかの操作と重なりました。もう一度試してください")
+
+    @app.get("/api/negotiate")
+    def negotiate(_: str = Depends(user), p: Persona = Depends(persona)) -> dict:
+        groups = [t.value for t in Team] if p.team == Team.CHIEF_ENGINEER else [p.team.value]
+        return {"url": deps.realtime.client_url(groups) if deps.realtime else None}
+
+    @app.get("/api/files/{file_id}")
+    def file(file_id: str, _: str = Depends(user), p: Persona = Depends(persona)) -> Response:
+        notifications = {n["id"]: n for n in deps.store.query("notifications")}
+        shown = visible_messages(deps.store.query("messages", {"team": p.team.value}), notifications)
+        if deps.files is None or file_id not in allowed_file_ids(shown):
+            raise HTTPException(status_code=404, detail="ファイルがありません")
+        data = deps.files.content(file_id)
+        return Response(content=data, media_type=media_type(data), headers={"Cache-Control": "private, max-age=3600"})
 
     # --- ここより上に /api のルートを足す。画面の配信は最後に置く --------------------------
 
