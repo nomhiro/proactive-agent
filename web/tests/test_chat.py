@@ -7,7 +7,7 @@ from vehicle_core.constants import Team
 from proactive_web.app import Deps, create_app
 from proactive_web.chat import ChatBusy, ChatFailed, ChatService, chat_prompt
 from proactive_web.personas import PERSONAS
-from tests.helpers import MORNING, FixedClock
+from tests.helpers import MORNING, REAL, FixedClock
 
 USER = {"X-MS-CLIENT-PRINCIPAL-NAME": "someone@example.com"}
 
@@ -59,8 +59,13 @@ def clock():
 
 
 @pytest.fixture
-def service(store, client, clock):
-    return ChatService(store, client, clock.now)
+def real():
+    return MovingClock(REAL)
+
+
+@pytest.fixture
+def service(store, client, clock, real):
+    return ChatService(store, client, clock.now, system_now=real.now)
 
 
 def test_send_writes_human_message_starts_background_response_and_running_run(store, service, client):
@@ -72,7 +77,8 @@ def test_send_writes_human_message_starts_background_response_and_running_run(st
                                f"チャット（発言 ID: {mid}）\n佐藤（モーター制御、モータートルク制御の主担当）: 今週は v2.1 で手一杯です")]
     run = store.get("agent_runs", f"run-chat-{mid}")
     assert run["state"] == "running" and run["team"] == "motor_control"
-    assert run["detail"] == {"kind": "chat", "conversation_id": "conv-1", "response_id": "resp-1", "message_id": mid}
+    assert run["detail"] == {"kind": "chat", "conversation_id": "conv-1", "response_id": "resp-1", "message_id": mid,
+                             "started_real_at": REAL.isoformat()}
 
 
 def test_chat_prompt_format():
@@ -121,11 +127,11 @@ def test_sync_writes_system_message_on_failure(store, service, client):
     assert store.get("agent_runs", f"run-chat-{mid}")["detail"]["error"] == "failed"
 
 
-def test_sync_times_out_after_ten_minutes(store, service, client, clock):
+def test_sync_times_out_after_ten_minutes(store, service, client, real):
     mid = service.send(PERSONAS["tanaka"], "a")
-    clock.value = MORNING + timedelta(minutes=9)
+    real.value = REAL + timedelta(minutes=9)
     assert service.sync() == []
-    clock.value = MORNING + timedelta(minutes=11)
+    real.value = REAL + timedelta(minutes=11)
     assert service.sync() == [f"run-chat-{mid}"]
     assert store.get("messages", f"msg-reply-{mid}")["text"] == "返事を作れませんでした（状態: timeout）"
 
@@ -170,3 +176,48 @@ def test_chat_routes(store, client):
     state = c.get("/api/state", params={"persona": "tanaka"}, headers=USER).json()
     assert state["chat_busy"] is False and state["messages"][-1]["text"] == "返事"
     assert c.post("/api/chat", json={"persona": "sato", "text": " "}, headers=USER).status_code == 422
+
+
+def test_virtual_clock_jump_does_not_time_out_reply(store, service, client, clock):  # 最終レビュー Important 2
+    mid = service.send(PERSONAS["tanaka"], "a")
+    clock.value = MORNING + timedelta(hours=1)  # シナリオの手順で仮想の時計だけが進む
+    assert service.sync() == []
+    assert store.get("agent_runs", f"run-chat-{mid}")["state"] == "running"
+
+
+class ReentrantClient(FakeChatClient):
+    """返事を始める途中で、同じチームの別の画面が送る（最終レビュー Important 5）。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.service = None
+        self.inner_error = None
+
+    def start_response(self, team, conversation_id, prompt):
+        if self.service is not None:
+            other, self.service = self.service, None
+            try:
+                other.send(PERSONAS["tanaka"], "同時に送った")
+            except Exception as e:  # noqa: BLE001
+                self.inner_error = e
+        return super().start_response(team, conversation_id, prompt)
+
+
+def test_send_racing_another_send_for_same_team_is_busy(store, clock, real):  # 最終レビュー Important 5
+    client = ReentrantClient()
+    service = ChatService(store, client, clock.now, system_now=real.now)
+    client.service = service
+    service.send(PERSONAS["tanaka"], "先に送った")
+    assert isinstance(client.inner_error, ChatBusy)
+    assert len(client.prompts) == 1
+    assert len([r for r in store.query("agent_runs") if r["id"].startswith("run-chat-")]) == 1
+
+
+def test_claim_is_released_after_send_and_stale_claim_does_not_block(store, service, client, real):
+    mid = service.send(PERSONAS["tanaka"], "a")
+    assert not [d for d in store.query("system") if d["id"].startswith("chat-claim-")]
+    client.finish("completed", "ok")
+    service.sync()
+    store.create("system", {"id": "chat-claim-integrated_control", "vehicle_id": "kakuu-suv",
+                            "claimed_at": (REAL - timedelta(minutes=5)).isoformat()})
+    assert service.send(PERSONAS["tanaka"], "b") != mid  # 送る途中で止まった古い確保は無視する

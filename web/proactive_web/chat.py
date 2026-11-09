@@ -3,7 +3,10 @@
 - 会話はチームに1本（team_settings.chat_conversation_id）。なければ最初のチャットで作る
 - 人の発言を messages に書き、決まった形のプロンプトを background=True で送り、作業記録 run-chat-<発言 ID> を作って戻る
 - 返事の受け取りは sync。画面の読み直し（/api/state）と CLI が呼ぶ。裏で待ち続ける処理は持たない
-- 返事待ちのあいだは、そのチームの新しいチャットを受け付けない（ChatBusy）
+- 返事待ちのあいだは、そのチームの新しいチャットを受け付けない（ChatBusy）。送る処理のあいだは
+  system/chat-claim-<チーム> を新規作成して確保し、同時に送られた2つ目をはじく。確保は送り終えたら消す。
+  送る途中で止まって残った確保は、CLAIM_STALE を過ぎたら無視する
+- 返事の待ち時間（REPLY_TIMEOUT）は実時間で測る。シナリオの手順は仮想の時計だけを大きく進めるため
 - エージェントへの要求に入れるのは conversation、input、background だけ（harness が管理する項目は送らない）
 """
 
@@ -16,7 +19,7 @@ from typing import Protocol
 
 from proactive_functions.store import Conflict, NotFound, Store
 from vehicle_core.clock import to_jst
-from vehicle_core.constants import TEAM_LABELS_JA, Team, agent_name
+from vehicle_core.constants import JST, TEAM_LABELS_JA, VEHICLE_ID, Team, agent_name
 from vehicle_core.models import AgentRun, Message, MessageRole
 
 from .personas import Persona
@@ -25,6 +28,8 @@ log = logging.getLogger(__name__)
 
 MAX_TEXT = 2000
 REPLY_TIMEOUT = timedelta(minutes=10)
+CLAIM_STALE = timedelta(minutes=2)
+CLAIM_CONTAINER = "system"
 FAILED_STATUSES = {"failed", "cancelled", "incomplete"}
 ASSISTANT_AUTHOR = "agent"  # MCP の post_message と同じ
 
@@ -82,19 +87,58 @@ def reply_id_for(message_id: str) -> str:
     return f"msg-reply-{message_id}"
 
 
+def claim_id_for(team: Team) -> str:
+    return f"chat-claim-{team.value}"
+
+
+def _real_now() -> datetime:
+    return datetime.now(JST)
+
+
 class ChatService:
-    def __init__(self, store: Store, client: AgentChatClient, now: Callable[[], datetime]) -> None:
+    def __init__(self, store: Store, client: AgentChatClient, now: Callable[[], datetime],
+                 system_now: Callable[[], datetime] = _real_now) -> None:
         self.store = store
         self.client = client
         self._now = now
+        self._system_now = system_now
 
     def _running(self, team: Team | None) -> list[dict]:
         where = {"state": "running"} | ({"team": team.value} if team else {})
         return [r for r in self.store.query("agent_runs", where) if (r.get("detail") or {}).get("kind") == "chat"]
 
+    def _fresh_claim(self, team: Team) -> dict | None:
+        doc = self.store.get(CLAIM_CONTAINER, claim_id_for(team))
+        if doc is None:
+            return None
+        claimed_at = datetime.fromisoformat(doc["claimed_at"])
+        return doc if self._system_now() - claimed_at < CLAIM_STALE else None
+
     def busy(self, team: Team | None) -> bool:
-        """team が None なら、どのチームでも返事待ちがあるか。"""
-        return bool(self._running(team))
+        """team が None なら、どのチームでも返事待ちがあるか。送っている途中の確保も返事待ちとみなす。"""
+        teams = [team] if team else list(Team)
+        return bool(self._running(team)) or any(self._fresh_claim(t) for t in teams)
+
+    def _claim(self, team: Team) -> None:
+        doc = {"id": claim_id_for(team), "vehicle_id": VEHICLE_ID, "claimed_at": to_jst(self._system_now()).isoformat()}
+        for _ in range(2):
+            try:
+                self.store.create(CLAIM_CONTAINER, doc)
+                return
+            except Conflict:
+                if self._fresh_claim(team) is not None:
+                    raise ChatBusy("アシスタントが返事を書いています。少し待ってから送ってください") from None
+                try:
+                    self.store.delete(CLAIM_CONTAINER, claim_id_for(team))  # 送る途中で止まった古い確保
+                except NotFound:
+                    pass
+        raise ChatBusy("アシスタントが返事を書いています。少し待ってから送ってください")
+
+    def _release(self, team: Team) -> None:
+        try:
+            self.store.delete(CLAIM_CONTAINER, claim_id_for(team))
+        except NotFound:
+            pass
 
     def _conversation(self, team: Team) -> str:
         doc_id = f"ts-{team.value}"
@@ -128,6 +172,15 @@ class ChatService:
         team = persona.team
         if self.busy(team):
             raise ChatBusy("アシスタントが返事を書いています。少し待ってから送ってください")
+        self._claim(team)
+        try:
+            if self._running(team):
+                raise ChatBusy("アシスタントが返事を書いています。少し待ってから送ってください")
+            return self._send_claimed(persona, team, text)
+        finally:
+            self._release(team)
+
+    def _send_claimed(self, persona: Persona, team: Team, text: str) -> str:
         now = to_jst(self._now())
         message_id = f"msg-{uuid.uuid4().hex[:12]}"
         conversation_id = self._conversation(team)
@@ -141,9 +194,16 @@ class ChatService:
             raise ChatFailed("アシスタントに届けられませんでした") from e
         run = AgentRun(id=run_id_for(message_id), team=team, state="running", title="チャットへの返事", started_at=now,
                        detail={"kind": "chat", "conversation_id": conversation_id, "response_id": response_id,
-                               "message_id": message_id})
+                               "message_id": message_id,
+                               "started_real_at": to_jst(self._system_now()).isoformat()})
         self.store.create("agent_runs", run.model_dump(mode="json"))
         return message_id
+
+    def _elapsed(self, run: AgentRun) -> timedelta:
+        started = run.detail.get("started_real_at")
+        if started:
+            return self._system_now() - datetime.fromisoformat(started)
+        return to_jst(self._now()) - to_jst(run.started_at)  # 実時間を持たない古い記録
 
     def sync(self, team: Team | None = None) -> list[str]:
         now = to_jst(self._now())
@@ -161,7 +221,7 @@ class ChatService:
             elif status in FAILED_STATUSES:
                 role, author, body, extra = (MessageRole.SYSTEM, "system", f"返事を作れませんでした（状態: {status}）",
                                              {"error": status})
-            elif now - to_jst(run.started_at) >= REPLY_TIMEOUT:
+            elif self._elapsed(run) >= REPLY_TIMEOUT:
                 role, author, body, extra = (MessageRole.SYSTEM, "system", "返事を作れませんでした（状態: timeout）",
                                              {"error": "timeout"})
             else:

@@ -3,19 +3,27 @@
 - SCENARIO_ORDER の全シナリオの手順を1列に並べ、system/scenario_progress の next_index で次の手を覚える
 - 「次へ」は、前提を確かめる → 時計を手順の時刻まで進める（戻さない）→ 手順を行う → next_index を進める
 - 前提が揃っていなければ、時計も進み具合も変えずに StepNotReady
-- 時計の手順は、調査が終わるまで進めない（夜の調査の途中で朝にすると、昼の時刻で通知が記録されてしまう）
+- 時計の手順は、調査が終わるまで進めない（夜の調査の途中で朝にすると、昼の時刻で通知が記録されてしまう）。
+  「終わった」はデータから決める: 直前の時計の手順より後に流した変更イベント・試験結果と、すべてのエージェント間
+  メールについて、Functions と同じ振り分け（vehicle_core.routing、handlers.mail_request）で調査依頼の ID を
+  求め、その依頼がまだない／pending／dispatched なのに作業記録 run-inv-<ID> が done でない、のどれかなら待つ
+  （変更フィードのトリガーが動く前と、起動の直前の隙間をふさぐ）
+- 承認の手順は、発表者が画面で先に承認していれば、その提案で足りないメールを揃えて済ませる
 """
 
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from proactive_functions.clock import StoredClock, set_virtual_now
+from proactive_functions.docs import models
+from proactive_functions.handlers import load_graph, mail_request
 from proactive_functions.seeding import seed_store
 from proactive_functions.store import Conflict, NotFound, Store
 from vehicle_core.changes import apply_changes
 from vehicle_core.clock import to_jst
 from vehicle_core.constants import JST, VEHICLE_ID
-from vehicle_core.models import MailKind, ProposalStatus
+from vehicle_core.models import AgentMail, MailKind, ProposalStatus, TestRun, Watch
+from vehicle_core.routing import route_change, route_test_run
 from vehicle_core.scenarios import (
     SCENARIO_ORDER,
     SCENARIOS,
@@ -33,6 +41,7 @@ PROGRESS_CONTAINER = "system"
 PROGRESS_ID = "scenario_progress"
 PEOPLE: dict[str, str] = {p.id: p.name_ja for p in build_dataset().people}
 LONG_VALUE = 20
+DISPATCH_STALE = timedelta(minutes=15)  # 起動の印を付けたまま作業記録ができない依頼は、止まったものとみなす
 
 
 class StepNotReady(Exception):
@@ -109,27 +118,78 @@ class ScenarioRunner:
 
     # --- 前提 -------------------------------------------------------------------
 
-    def _unfinished_investigation(self) -> str | None:
+    def _expected_investigations(self, index: int) -> list[str]:
+        """直前の時計の手順より後の変更・試験結果と、すべてのメールから、作られるはずの調査依頼の ID。"""
+        graph = load_graph(self.store)
+        watches = models(self.store.query("watches"), Watch)
+        ids: list[str] = []
+        for _, step in reversed(_flat()[:index]):
+            if step.kind == StepKind.SET_CLOCK:
+                break
+            if step.kind == StepKind.CHANGE and step.change:
+                ids += [r.id for r in route_change(step.change, graph, watches)]
+            if step.kind == StepKind.TEST_RUN and step.test_run:
+                new = step.test_run
+                history = [r for r in models(self.store.query("test_runs", {"feature": new.feature}), TestRun)
+                           if r.id != new.id and r.executed_at <= new.executed_at]  # トリガーが見た時点の履歴
+                ids += [r.id for r in route_test_run(new, history, graph, watches)]
+        for mail in models(self.store.query("agent_mail"), AgentMail, skip_seed=True):
+            request = mail_request(mail)
+            if request is not None:
+                ids.append(request.id)
+        return ids
+
+    def _investigation_unfinished(self, inv_id: str, seen: frozenset[str] = frozenset()) -> bool:
+        doc = self.store.get("investigations", inv_id)
+        if doc is None:
+            return True  # 変更フィードのトリガーがまだ依頼を作っていない
+        status = doc.get("status")
+        if status == "pending":
+            return True
+        if status == "merged":
+            target = doc.get("merged_into")
+            return bool(target) and target not in seen and self._investigation_unfinished(target, seen | {inv_id})
+        if status == "dispatched":
+            run = self.store.get("agent_runs", f"run-inv-{inv_id}")
+            if run is None:
+                dispatched_at = doc.get("dispatched_at")
+                return not (dispatched_at and self._virtual_now() - to_jst(datetime.fromisoformat(dispatched_at))
+                            > DISPATCH_STALE)
+            return run.get("state") != "done"
+        return False  # failed
+
+    def _unfinished_investigation(self, index: int) -> str | None:
         pending = self.store.query("investigations", {"status": "pending"})
         if pending:
             return pending[0]["id"]
+        for inv_id in self._expected_investigations(index):
+            if self._investigation_unfinished(inv_id):
+                return inv_id
         for r in self.store.query("agent_runs", {"state": "running"}):
             if (r.get("detail") or {}).get("kind") != "chat":
                 return r["id"]
         return None
 
-    def _oldest_pending_notice(self, team: str) -> dict | None:
-        found = [p for p in self.store.query("proposals", {"team": team, "status": ProposalStatus.PENDING.value})
+    def _notices(self, team: str, status: ProposalStatus) -> list[dict]:
+        found = [p for p in self.store.query("proposals", {"team": team, "status": status.value})
                  if p.get("kind") == MailKind.IMPACT_NOTICE.value]
-        return min(found, key=lambda p: to_jst(datetime.fromisoformat(p["created_at"])), default=None)
+        return sorted(found, key=lambda p: to_jst(datetime.fromisoformat(p["created_at"])))
 
-    def _check(self, step: ScenarioStep) -> dict | None:
+    def _notice_to_approve(self, team: str) -> dict | None:
+        """いちばん古い承認待ち。なければ、発表者が画面で先に承認したもの（足りないメールを揃える）。"""
+        pending = self._notices(team, ProposalStatus.PENDING)
+        if pending:
+            return pending[0]
+        approved = self._notices(team, ProposalStatus.APPROVED)
+        return approved[-1] if approved else None
+
+    def _check(self, step: ScenarioStep, index: int) -> dict | None:
         if step.kind == StepKind.SET_CLOCK:
-            busy = self._unfinished_investigation()
+            busy = self._unfinished_investigation(index)
             if busy:
                 raise StepNotReady(f"調査が終わっていません（{busy}）。終わってから時計を進めます")
         if step.kind == StepKind.APPROVE:
-            proposal = self._oldest_pending_notice(step.team.value)
+            proposal = self._notice_to_approve(step.team.value)
             if proposal is None:
                 raise StepNotReady("承認待ちの影響の連絡がまだありません。アシスタントの調査が終わるのを待ってください")
             return proposal
@@ -171,7 +231,7 @@ class ScenarioRunner:
         if index >= len(flat):
             raise StepNotReady("シナリオはすべて終わりました。最初からやり直すときは「デモを最初からやり直す」を使ってください")
         _, step = flat[index]
-        proposal = self._check(step)
+        proposal = self._check(step, index)
         self._advance_clock(step.at)
         if step.kind == StepKind.CHANGE:
             self._apply_change(step)

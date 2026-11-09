@@ -3,6 +3,8 @@
 // - サインインは Container Apps の組み込み認証（Entra）。クライアントシークレットは使わない
 //   （シークレットなしでは ID トークンだけを受け取る暗黙的フローになる。キーを持たない方針のため）
 // - BFF は返事の受け取りを裏で待たないので、ゼロまで縮んでよい。最大 1 台
+// - サインインできるのは、アプリに割り当てた人だけ（デプロイした人を割り当てる）。デモのデータを消して作り直す
+//   操作があるため、テナントの全員には開かない。デプロイした人が分からないときは、割り当てを求めない
 extension microsoftGraphV1
 
 param location string
@@ -20,6 +22,8 @@ param foundryProjectEndpoint string
 param memoryStoreName string
 param webPubSubEndpoint string
 param webPubSubHub string
+@description('サインインを許す人（azd のデプロイした人）。空なら割り当てを求めない')
+param principalId string = ''
 
 var appName = 'ca-web-${resourceToken}'
 
@@ -85,6 +89,14 @@ resource signInApp 'Microsoft.Graph/applications@v1.0' = {
 
 resource signInSp 'Microsoft.Graph/servicePrincipals@v1.0' = {
   appId: signInApp.appId
+  appRoleAssignmentRequired: !empty(principalId)
+}
+
+// アプリが役割を持たないので、既定の役割 ID（すべて 0）で割り当てる
+resource signInAssignment 'Microsoft.Graph/appRoleAssignedTo@v1.0' = if (!empty(principalId)) {
+  appRoleId: '00000000-0000-0000-0000-000000000000'
+  principalId: principalId
+  resourceId: signInSp.id
 }
 
 resource app 'Microsoft.App/containerApps@2024-03-01' = {

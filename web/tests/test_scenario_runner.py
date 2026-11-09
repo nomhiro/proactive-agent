@@ -40,6 +40,20 @@ def runner(store, chat_client):
     return ScenarioRunner(store, chat, system_now=lambda: REAL)
 
 
+def settle(store) -> None:
+    """Functions の代わりに、変更イベント・試験結果・メールから調査依頼を作り、どれも終わったことにする。"""
+    from proactive_functions.handlers import handle_agent_mail, handle_change_events, handle_test_runs
+    handle_change_events(store.query("change_events"), store)
+    handle_test_runs(store.query("test_runs"), store)
+    handle_agent_mail(store.query("agent_mail"), store)
+    for inv in store.query("investigations"):
+        if inv.get("status") == "pending":
+            store.upsert("investigations", inv | {"status": "dispatched"})
+        if store.get("agent_runs", f"run-inv-{inv['id']}") is None:
+            store.create("agent_runs", run(f"run-inv-{inv['id']}", team=inv.get("team", "integrated_control"),
+                                           state="done", detail={"investigation_id": inv["id"]}))
+
+
 def add_pending_notice(store, id_="prop-1", created_at=NIGHT):
     store.create("proposals", {
         "id": id_, "vehicle_id": VEHICLE_ID, "team": "integrated_control", "kind": "impact_notice",
@@ -70,6 +84,7 @@ def test_clock_is_never_moved_backwards(store, runner):
 
 def test_approve_step_without_pending_proposal_is_not_ready_and_changes_nothing(store, runner):  # Review Focus 5
     runner.next()  # 変更
+    settle(store)
     runner.next()  # 8:00
     clock_before = store.get("system", "clock")["offset_seconds"]
     with pytest.raises(StepNotReady, match="承認待ち"):
@@ -80,6 +95,7 @@ def test_approve_step_without_pending_proposal_is_not_ready_and_changes_nothing(
 
 def test_clock_step_waits_for_running_investigation(store, runner):  # Review Focus 6
     runner.next()  # 21:10 の変更
+    settle(store)
     store.create("agent_runs", run("run-inv-x", state="running", detail={"investigation_id": "x"}))
     with pytest.raises(StepNotReady, match="調査が終わっていません"):
         runner.next()
@@ -91,16 +107,96 @@ def test_clock_step_waits_for_running_investigation(store, runner):  # Review Fo
 
 def test_clock_step_waits_for_pending_investigation_but_not_for_chat_runs(store, runner):
     runner.next()
+    settle(store)
     store.create("agent_runs", run("run-chat-m1", state="running", detail={"kind": "chat"}))
     store.create("investigations", {"id": "inv-1", "vehicle_id": VEHICLE_ID, "status": "pending"})
     with pytest.raises(StepNotReady, match="inv-1"):
         runner.next()
     store.upsert("investigations", store.get("investigations", "inv-1") | {"status": "dispatched"})
+    store.create("agent_runs", run("run-inv-inv-1", state="done", detail={"investigation_id": "inv-1"}))
     runner.next()
+
+
+def test_clock_step_waits_until_change_is_routed(store, runner):  # 最終レビュー Important 4(a)
+    runner.next()  # 21:10 の変更。変更フィードのトリガーはまだ調査依頼を作っていない
+    with pytest.raises(StepNotReady, match="調査が終わっていません"):
+        runner.next()
+    assert vnow(store) == datetime(2026, 11, 17, 21, 10, tzinfo=JST)
+    settle(store)
+    runner.next()
+    assert vnow(store) == datetime(2026, 11, 18, 8, 0, tzinfo=JST)
+
+
+def test_clock_step_waits_for_dispatched_investigation_until_its_run_finishes(store, runner):  # Important 4(b)
+    from proactive_functions.handlers import handle_change_events
+    runner.next()
+    handle_change_events(store.query("change_events"), store)
+    inv = store.query("investigations")[0]
+    store.upsert("investigations", inv | {"status": "dispatched"})  # 起動の直前（作業記録はまだない）
+    with pytest.raises(StepNotReady, match="調査が終わっていません"):
+        runner.next()
+    store.create("agent_runs", run(f"run-inv-{inv['id']}", state="running", detail={"investigation_id": inv["id"]}))
+    with pytest.raises(StepNotReady):
+        runner.next()
+    store.upsert("agent_runs", store.get("agent_runs", f"run-inv-{inv['id']}") | {"state": "done"})
+    runner.next()
+
+
+def test_clock_step_follows_merged_investigation(store, runner):
+    from proactive_functions.handlers import handle_change_events
+    runner.next()
+    handle_change_events(store.query("change_events"), store)
+    inv = store.query("investigations")[0]
+    store.upsert("investigations", inv | {"status": "merged", "merged_into": "inv-merged"})
+    store.create("investigations", {"id": "inv-merged", "vehicle_id": VEHICLE_ID, "status": "dispatched"})
+    with pytest.raises(StepNotReady, match="調査が終わっていません"):
+        runner.next()
+    store.create("agent_runs", run("run-inv-inv-merged", state="done", detail={"investigation_id": "inv-merged"}))
+    runner.next()
+
+
+def test_clock_step_waits_for_mail_not_yet_routed(store, runner):  # Important 4（メールから起きる調査）
+    runner.next()
+    settle(store)
+    store.create("agent_mail", {"id": "am-x", "vehicle_id": VEHICLE_ID, "thread_id": "th-x",
+                                "from_team": "integrated_control", "to_team": "evaluation",
+                                "kind": "analysis_request", "body": "解析して", "related_artifact_ids": [],
+                                "created_at": NIGHT.isoformat()})
+    with pytest.raises(StepNotReady, match="調査が終わっていません"):
+        runner.next()
+    settle(store)
+    runner.next()
+
+
+def test_approve_step_completes_when_presenter_already_approved_in_ui(store, runner):  # Important 3
+    from proactive_web.personas import PERSONAS
+    from proactive_web.proposals import decide_proposal
+    runner.next()
+    settle(store)
+    runner.next()
+    add_pending_notice(store)
+    decide_proposal(store, "prop-1", PERSONAS["tanaka"], "approve", "画面で直した本文", vnow(store))
+    store.delete("agent_mail", "am-prop-1-motor_control")  # メールを書く途中で止まっていた
+    done = runner.next()
+    assert done["index"] == 2 and done["done"] is True
+    assert vnow(store) == datetime(2026, 11, 18, 8, 20, tzinfo=JST)
+    assert store.get("agent_mail", "am-prop-1-motor_control")["body"] == "画面で直した本文"
+
+
+def test_admin_next_collects_chat_replies_first(store, chat_client):  # Important 6
+    from proactive_web.personas import PERSONAS
+    chat = ChatService(store, chat_client, lambda: vnow(store))
+    deps = Deps(store=store, clock=StoredClock(store, FixedSystem()), chat=chat, system_now=lambda: REAL)
+    c = TestClient(create_app(deps))
+    mid = chat.send(PERSONAS["tanaka"], "田中の質問")  # 画面は高橋に切り替えていて、田中の返事は誰も受け取っていない
+    chat_client.finish("completed", "答え")
+    c.post("/api/admin/next", headers=USER)
+    assert store.get("agent_runs", f"run-chat-{mid}")["state"] == "done"
 
 
 def test_approve_step_approves_oldest_pending_impact_notice_as_tanaka(store, runner):
     runner.next()
+    settle(store)
     runner.next()
     add_pending_notice(store, "prop-new", created_at=datetime(2026, 11, 17, 22, 0, tzinfo=JST))
     add_pending_notice(store, "prop-old", created_at=datetime(2026, 11, 17, 21, 20, tzinfo=JST))
@@ -113,7 +209,7 @@ def test_approve_step_approves_oldest_pending_impact_notice_as_tanaka(store, run
 
 
 def test_human_says_step_sends_chat_as_person(store, runner, chat_client):
-    runner.next(); runner.next(); add_pending_notice(store); runner.next()
+    runner.next(); settle(store); runner.next(); add_pending_notice(store); runner.next()
     runner.next()
     team, _, prompt = chat_client.prompts[-1]
     assert team.value == "motor_control"
@@ -122,7 +218,7 @@ def test_human_says_step_sends_chat_as_person(store, runner, chat_client):
 
 
 def test_human_says_step_is_not_ready_while_chat_busy(store, runner):
-    runner.next(); runner.next(); add_pending_notice(store); runner.next()
+    runner.next(); settle(store); runner.next(); add_pending_notice(store); runner.next()
     store.create("agent_runs", run("run-chat-x", team="motor_control", detail={"kind": "chat"}))
     with pytest.raises(StepNotReady, match="返事"):
         runner.next()
@@ -169,6 +265,7 @@ def test_admin_routes(store, chat_client):
     body = c.get("/api/admin/steps", headers=USER).json()
     assert body["steps"][0]["done"] is False and body["now"].startswith("2026-11-17T18:00")
     assert c.post("/api/admin/next", headers=USER).json()["index"] == 0
+    settle(store)
     c.post("/api/admin/next", headers=USER)
     r = c.post("/api/admin/next", headers=USER)
     assert r.status_code == 409 and "承認待ち" in r.json()["detail"]

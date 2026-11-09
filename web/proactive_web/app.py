@@ -224,6 +224,11 @@ def create_app(deps: Deps | None = None, *, static_dir: Path | None = None) -> F
     @app.post("/api/admin/next")
     def admin_next(_: str = Depends(user)) -> dict:
         from .scenario_runner import StepNotReady
+        if deps.chat is not None:
+            try:
+                deps.chat.sync(None)  # どの画面も開いていないチームの返事も受け取ってから進める
+            except Exception:  # noqa: BLE001 — 受け取れなくても前提の確認で止まる
+                log.exception("chat sync failed before next step")
         try:
             return runner().next()
         except StepNotReady as e:

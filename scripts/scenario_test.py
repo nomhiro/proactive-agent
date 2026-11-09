@@ -29,7 +29,7 @@ from proactive_web.scenario_checks import EXPECTATIONS, CheckContext, snapshot  
 from proactive_web.scenario_runner import ScenarioRunner, StepNotReady  # noqa: E402
 
 POLL = 5.0
-STEP_READY_LIMIT = 300.0
+STEP_READY_LIMIT = 600.0  # 時計の手順は、メールから起きる調査まで終わるのを待つ
 DUPLICATE_WAIT = 90.0
 REDISPATCH_WAIT = 120.0
 IC = Team.INTEGRATED_CONTROL.value

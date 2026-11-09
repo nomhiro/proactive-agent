@@ -146,6 +146,7 @@ module web 'modules/web.bicep' = {
     memoryStoreName: memoryStoreName
     webPubSubEndpoint: webPubSub.outputs.endpoint
     webPubSubHub: webPubSub.outputs.hub
+    principalId: principalId
   }
 }
 

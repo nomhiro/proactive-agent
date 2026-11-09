@@ -42,11 +42,53 @@ def test_other_team_persona_cannot_decide(pstore):  # Review Focus 1
     assert pstore.get("proposals", "prop-1")["status"] == "pending"
 
 
-def test_second_decision_is_conflict_and_writes_no_more_mail(pstore):  # Review Focus 2
+def test_second_approve_is_idempotent_and_writes_no_more_mail(pstore):  # Review Focus 2
+    decide_proposal(pstore, "prop-1", PERSONAS["tanaka"], "approve", None, NOW)
+    out = decide_proposal(pstore, "prop-1", PERSONAS["tanaka"], "approve", "別の本文", NOW)
+    assert out["status"] == "approved" and out["draft"] == "下書き"
+    assert len(pstore.query("agent_mail")) == 2
+    assert pstore.get("agent_mail", "am-prop-1-motor_control")["body"] == "下書き"
+
+
+def test_reject_after_approve_is_conflict(pstore):
     decide_proposal(pstore, "prop-1", PERSONAS["tanaka"], "approve", None, NOW)
     with pytest.raises(DecisionError) as e:
+        decide_proposal(pstore, "prop-1", PERSONAS["tanaka"], "reject", None, NOW)
+    assert e.value.status == 409 and pstore.get("proposals", "prop-1")["status"] == "approved"
+
+
+def test_approve_after_reject_is_conflict_and_writes_no_mail(pstore):
+    decide_proposal(pstore, "prop-1", PERSONAS["tanaka"], "reject", None, NOW)
+    with pytest.raises(DecisionError) as e:
         decide_proposal(pstore, "prop-1", PERSONAS["tanaka"], "approve", None, NOW)
-    assert e.value.status == 409 and len(pstore.query("agent_mail")) == 2
+    assert e.value.status == 409 and pstore.query("agent_mail") == []
+
+
+def test_reject_landing_during_approve_leaves_no_mail(pstore):  # 最終レビュー Important 1
+    def other_screen_rejects(container, doc):
+        if container == "proposals":
+            pstore.before_replace = None
+            cur = pstore.get("proposals", "prop-1")
+            pstore.upsert("proposals", cur | {"status": "rejected", "decided_by": "tanaka"})
+    pstore.before_replace = other_screen_rejects
+    with pytest.raises(DecisionError) as e:
+        decide_proposal(pstore, "prop-1", PERSONAS["tanaka"], "approve", None, NOW)
+    assert e.value.status == 409
+    assert pstore.get("proposals", "prop-1")["status"] == "rejected"
+    assert pstore.query("agent_mail") == []
+
+
+def test_retry_after_status_saved_but_mail_missing_sends_saved_draft(pstore):  # 最終レビュー Important 1
+    cur = pstore.get("proposals", "prop-1")
+    pstore.upsert("proposals", cur | {"status": "approved", "decided_by": "tanaka", "decided_at": NOW.isoformat(),
+                                      "draft": "送ると決めた本文"})
+    pstore.create("agent_mail", {"id": "am-prop-1-motor_control", "vehicle_id": VEHICLE_ID, "thread_id": "th-1",
+                                 "from_team": "integrated_control", "to_team": "motor_control",
+                                 "kind": "impact_notice", "body": "送ると決めた本文", "created_at": NOW.isoformat()})
+    out = decide_proposal(pstore, "prop-1", PERSONAS["tanaka"], "approve", None, NOW)
+    assert out["status"] == "approved"
+    assert pstore.get("agent_mail", "am-prop-1-evaluation")["body"] == "送ると決めた本文"
+    assert len(pstore.query("agent_mail")) == 2
 
 
 def test_concurrent_decision_detected_by_etag(pstore):  # Review Focus 2（二つの画面から同時）
