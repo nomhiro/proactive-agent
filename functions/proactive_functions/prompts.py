@@ -6,7 +6,7 @@
 import json
 
 from vehicle_core.constants import Team
-from vehicle_core.models import AgentMail, ChangeEvent, Schedule
+from vehicle_core.models import AgentMail, ChangeEvent, Proposal, Schedule
 from vehicle_core.routing import InvestigationRequest
 
 TRIGGER_LABELS = {
@@ -56,6 +56,7 @@ def _change_lines(changes: list[ChangeEvent], team: Team) -> list[str]:
 
     数値が変わったときは investigate スキルの手順5を指す。スキルに書くだけでは、エージェントがこの手順を飛ばした
     （Azure 上での確認 2回目）。評価チームは自分で解析するので指さない。
+    結果を待つと書かないと、解析を頼んだところで下書きを作らずに止まった（4回目）。
     """
     if not changes:
         return []
@@ -66,7 +67,8 @@ def _change_lines(changes: list[ChangeEvent], team: Team) -> list[str]:
         lines.append("- 題名や説明文だけの変更（値や仕様の項目は変わっていない）")
     elif team != Team.EVALUATION and any(
             _is_number(f.before) and _is_number(f.after) for c in changes if c.is_substantive for f in c.changes):
-        lines.append("- 数値の変更なので、investigate スキルの手順5のとおり、評価チームに analysis_request を送る")
+        lines.append("- 数値の変更なので、investigate スキルの手順5のとおり、評価チームに analysis_request を送る。"
+                     "結果は待たずに、この調査で通知の記録と下書きまで進める")
     return lines
 
 
@@ -84,8 +86,23 @@ def _mail_lines(mails: list[AgentMail]) -> list[str]:
     return lines
 
 
+def _proposal_lines(proposals: list[Proposal] | None) -> list[str]:
+    """起点についての、このチームの影響の連絡の下書き。None は「調べていない」で、何も書かない。
+
+    解析の結果を受けた調査が、前の調査で下書きができたものと思い込んで作らなかった（Azure 上での確認 4回目）。
+    """
+    if proposals is None:
+        return []
+    if not proposals:
+        return ["- この起点についての、このチームの影響の連絡の下書き: まだない。他チームのデータに影響があれば、"
+                "investigate スキルの手順7のとおり、この調査で create_proposal で作る"]
+    listed = ", ".join(f"{p.id}（{p.status.value}）" for p in proposals)
+    return [f"- この起点についての、このチームの影響の連絡の下書き: {listed}。同じ件の下書きは新しく作らない"]
+
+
 def investigation_prompt(req: InvestigationRequest, run_id: str, schedules: list[Schedule],
-                         changes: list[ChangeEvent] | None = None, mails: list[AgentMail] | None = None) -> str:
+                         changes: list[ChangeEvent] | None = None, mails: list[AgentMail] | None = None,
+                         proposals: list[Proposal] | None = None) -> str:
     morning = any(s.task in MORNING_TASKS for s in schedules)
     lines = [
         "調査の依頼です。",
@@ -100,6 +117,7 @@ def investigation_prompt(req: InvestigationRequest, run_id: str, schedules: list
     lines.append(f"- 作業記録: {run_id}")
     lines += _change_lines(changes or [], req.team)
     lines += _mail_lines(mails or [])
+    lines += _proposal_lines(proposals)
     lines += _impact_lines(req)
     lines += _schedule_lines(schedules)
     lines += ["", "手順:", "1. 最初に get_now を呼び、いまの時刻と、静かな時間帯かどうかを確かめる。"]

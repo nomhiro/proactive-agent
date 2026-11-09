@@ -82,6 +82,50 @@ def test_invoke_puts_mail_contents_in_prompt_and_skips_non_mail_ids():  # Azure 
     assert "周期 20ms で応答を見たい" in fake.calls[1][2] and "th-9" in fake.calls[1][2]
 
 
+
+def _analysis_mail(store, kind="analysis_result"):
+    store.create("agent_mail", {"id": "am-r", "vehicle_id": VEHICLE_ID, "thread_id": "th-9",
+                                "from_team": "evaluation", "to_team": "integrated_control",
+                                "kind": kind, "body": "遅れは +15 ms", "stance": "cannot" if kind == "human_reply" else None,
+                                "related_artifact_ids": ["SIG-BrkPedalPos"], "created_at": NOW.isoformat()})
+    return req_s1.model_copy(update={"team": Team.INTEGRATED_CONTROL, "trigger": "mail",
+                                     "source_ids": ["am-r"], "impact": None})
+
+
+def _proposal(store, id_, origin, status="pending", team="integrated_control"):
+    store.create("proposals", {"id": id_, "vehicle_id": VEHICLE_ID, "team": team, "kind": "impact_notice",
+                               "to_teams": ["motor_control"], "draft": "x", "related_artifact_ids": [origin],
+                               "thread_id": "th-p", "status": status, "created_at": NOW.isoformat()})
+
+
+def test_invoke_after_analysis_result_says_draft_not_made_yet():  # Azure 上での確認 4回目
+    store, fake = MemoryStore(), FakeResponses()
+    req = _analysis_mail(store)
+    _proposal(store, "prop-other", "SPEC-BRK-04")
+    _proposal(store, "prop-rejected", "SIG-BrkPedalPos", status="rejected")
+    _proposal(store, "prop-mc", "SIG-BrkPedalPos", team="motor_control")
+    enqueue(store, [req])
+    FoundryInvoker(store, lambda t: fake, clock).invoke(req)
+    prompt = fake.calls[1][2]
+    assert "まだない" in prompt and "prop-other" not in prompt and "prop-mc" not in prompt
+
+
+def test_invoke_after_analysis_result_lists_existing_draft():
+    store, fake = MemoryStore(), FakeResponses()
+    req = _analysis_mail(store)
+    _proposal(store, "prop-1", "SIG-BrkPedalPos")
+    enqueue(store, [req])
+    FoundryInvoker(store, lambda t: fake, clock).invoke(req)
+    assert "prop-1" in fake.calls[1][2] and "まだない" not in fake.calls[1][2]
+
+
+def test_invoke_after_human_reply_has_no_draft_line():
+    store, fake = MemoryStore(), FakeResponses()
+    req = _analysis_mail(store, kind="human_reply")
+    enqueue(store, [req])
+    FoundryInvoker(store, lambda t: fake, clock).invoke(req)
+    assert "下書き" not in fake.calls[1][2]
+
 def test_invoke_uses_team_agent():
     store, fake, asked = MemoryStore(), FakeResponses(), []
     enqueue(store, [req_s1])

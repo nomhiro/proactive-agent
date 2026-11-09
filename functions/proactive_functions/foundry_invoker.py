@@ -15,7 +15,7 @@ from typing import Protocol
 
 from vehicle_core.clock import crossed_morning, to_jst
 from vehicle_core.constants import VEHICLE_ID, Team, agent_name
-from vehicle_core.models import AgentMail, AgentRun, ChangeEvent, Schedule
+from vehicle_core.models import AgentMail, AgentRun, ChangeEvent, MailKind, Proposal, ProposalStatus, Schedule
 from vehicle_core.routing import InvestigationRequest
 
 from .docs import parse_each
@@ -93,10 +93,20 @@ class FoundryInvoker:
         docs = [d for d in (self.store.get("agent_mail", mid) for mid in request.source_ids) if d]
         return [m for _, m in parse_each(docs, AgentMail)]
 
+    def _proposals(self, request: InvestigationRequest, mails: list[AgentMail]) -> list[Proposal] | None:
+        """解析の結果を受けた調査にだけ、起点についての自チームの下書き（却下を除く）を渡す。"""
+        if not request.origin_artifact_id or not any(m.kind == MailKind.ANALYSIS_RESULT for m in mails):
+            return None
+        docs = self.store.query("proposals", {"team": request.team.value})
+        return [p for _, p in parse_each(docs, Proposal)
+                if p.kind == MailKind.IMPACT_NOTICE and p.status != ProposalStatus.REJECTED
+                and request.origin_artifact_id in p.related_artifact_ids]
+
     def invoke(self, request: InvestigationRequest) -> None:
         run_id = run_id_for(request.id)
+        mails = self._mails(request)
         prompt = investigation_prompt(request, run_id, self._schedules(request), self._changes(request),
-                                      self._mails(request))
+                                      mails, self._proposals(request, mails))
         client = self.client_for(request.team)
         conversation_id = client.create_conversation()
         response_id = client.start_response(conversation_id, prompt)

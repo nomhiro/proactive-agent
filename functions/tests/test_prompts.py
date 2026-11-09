@@ -2,7 +2,7 @@ from datetime import datetime
 
 from vehicle_core.constants import JST, Team
 from vehicle_core.impact import ImpactResult
-from vehicle_core.models import AgentMail, ChangeEvent, Classification, FieldChange, Schedule
+from vehicle_core.models import AgentMail, ChangeEvent, Classification, FieldChange, Proposal, Schedule
 from vehicle_core.routing import InvestigationRequest
 
 from proactive_functions.prompts import investigation_prompt
@@ -111,3 +111,31 @@ def test_prompt_for_mail_shows_kind_thread_stance_and_body():
     line = next(ln for ln in p.splitlines() if "am-1" in ln and "th-1" in ln)
     assert "motor_control → integrated_control の human_reply" in line and "stance cannot" in line
     assert "今週は v2.1 で手一杯です" in p
+
+
+# --- Azure 上での確認 4回目: 解析を頼んだあと下書きを作らずに止まり、解析の結果の調査も下書きを作らなかった ---
+
+def test_prompt_for_numeric_change_says_not_to_wait_for_analysis():
+    p = investigation_prompt(req_s1, "run-inv-abc", [], [change("chg-001", "attributes.period_ms", 10, 20)])
+    line = next(ln for ln in p.splitlines() if "analysis_request" in ln)
+    assert "待たず" in line and "下書き" in line
+
+
+def test_prompt_says_draft_not_made_yet():
+    req = req_s1.model_copy(update={"team": IC, "trigger": "mail", "source_ids": ["am-1"], "impact": None})
+    p = investigation_prompt(req, "run-inv-abc", [], proposals=[])
+    line = next(ln for ln in p.splitlines() if "下書き" in ln)
+    assert "まだない" in line and "create_proposal" in line
+
+
+def test_prompt_lists_existing_drafts_and_says_not_to_make_another():
+    prop = Proposal(id="prop-1", team=IC, kind="impact_notice", to_teams=[MC], draft="x",
+                    related_artifact_ids=["SIG-BrkPedalPos"], thread_id="th-1", created_at=T0)
+    req = req_s1.model_copy(update={"team": IC, "trigger": "mail", "source_ids": ["am-1"], "impact": None})
+    p = investigation_prompt(req, "run-inv-abc", [], proposals=[prop])
+    line = next(ln for ln in p.splitlines() if "prop-1" in ln)
+    assert "pending" in line and "作らない" in line
+
+
+def test_prompt_without_proposal_info_has_no_draft_line():
+    assert "下書き" not in investigation_prompt(req_s1, "run-inv-abc", [])
