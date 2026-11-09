@@ -30,3 +30,6 @@ functions/requirements.txt
 
 # Web アプリの画面のビルド結果（web/frontend の npm run build）
 web/proactive_web/static/
+
+# Playwright MCP のスクリーンショットとスナップショット
+.playwright-mcp/
