@@ -20,8 +20,8 @@ from proactive_functions.handlers import load_graph, mail_request
 from proactive_functions.seeding import seed_store
 from proactive_functions.store import Conflict, NotFound, Store
 from vehicle_core.changes import apply_changes
-from vehicle_core.clock import to_jst
-from vehicle_core.constants import JST, VEHICLE_ID
+from vehicle_core.clock import crossed_morning, to_jst
+from vehicle_core.constants import AGENT_TEAMS, DIGEST_TIME, JST, VEHICLE_ID
 from vehicle_core.models import AgentMail, MailKind, ProposalStatus, TestRun, Watch
 from vehicle_core.routing import route_change, route_test_run
 from vehicle_core.scenarios import (
@@ -41,6 +41,7 @@ PROGRESS_CONTAINER = "system"
 PROGRESS_ID = "scenario_progress"
 PEOPLE: dict[str, str] = {p.id: p.name_ja for p in build_dataset().people}
 LONG_VALUE = 20
+MORNING_WAIT = timedelta(minutes=10)  # 実時間。朝のまとめが起動しなかったとき、デモが止まり続けないように
 DISPATCH_STALE = timedelta(minutes=15)  # 起動の印を付けたまま作業記録ができない依頼は、止まったものとみなす
 
 
@@ -170,6 +171,27 @@ class ScenarioRunner:
                 return r["id"]
         return None
 
+    def _unfinished_morning(self, index: int) -> str | None:
+        """直前の時計の手順が朝を越えていたら、その朝の4体のまとめが終わるまで待つ。「次へ」を続けて押すと、tick が
+        朝のまとめを起動する前に次の朝まで進み、11/19 の朝が飛んだ（画面での確認）。時計を進めてから実時間で
+        MORNING_WAIT を過ぎたら待たない。"""
+        flat = _flat()
+        j = next((k for k in range(index - 1, 0, -1) if flat[k][1].kind == StepKind.SET_CLOCK), None)
+        if j is None or not crossed_morning(flat[j - 1][1].at, flat[j][1].at):
+            return None
+        clock = self.store.get("system", "clock") or {}
+        updated = clock.get("updated_at")
+        if updated and self.system_now() - to_jst(datetime.fromisoformat(updated)) >= MORNING_WAIT:
+            return None
+        at = to_jst(flat[j][1].at)
+        day = at.date() if at.time() >= DIGEST_TIME else at.date() - timedelta(days=1)
+        for team in AGENT_TEAMS:
+            run_id = f"run-morning-{team.value}-{day:%Y%m%d}"
+            doc = self.store.get("agent_runs", run_id)
+            if doc is None or doc.get("state") != "done":
+                return run_id
+        return None
+
     def _notices(self, team: str, status: ProposalStatus) -> list[dict]:
         found = [p for p in self.store.query("proposals", {"team": team, "status": status.value})
                  if p.get("kind") == MailKind.IMPACT_NOTICE.value]
@@ -188,6 +210,9 @@ class ScenarioRunner:
             busy = self._unfinished_investigation(index)
             if busy:
                 raise StepNotReady(f"調査が終わっていません（{busy}）。終わってから時計を進めます")
+            morning = self._unfinished_morning(index)
+            if morning:
+                raise StepNotReady(f"朝のまとめが終わっていません（{morning}）。終わってから時計を進めます")
         if step.kind == StepKind.APPROVE:
             proposal = self._notice_to_approve(step.team.value)
             if proposal is None:

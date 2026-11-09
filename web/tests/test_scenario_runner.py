@@ -277,3 +277,34 @@ def test_admin_routes(store, chat_client):
     assert c.post("/api/admin/reset", headers=USER).status_code == 200
     assert c.get("/api/admin/steps", headers=USER).json()["steps"][0]["done"] is False
     assert c.post("/api/admin/next").status_code == 401
+
+
+# --- 画面での確認: 「次へ」を続けて押すと、11/19 の朝のまとめが起動する前に 11/23 まで進んだ ---
+
+def _at_release_gap_step(store):
+    from datetime import timedelta
+
+    from proactive_functions.clock import set_virtual_now
+    from proactive_web.scenario_runner import _flat
+    index = next(i for i, (sc, _) in enumerate(_flat()) if sc.id == "s4_release_gap")
+    store.upsert("system", {"id": "scenario_progress", "vehicle_id": VEHICLE_ID, "next_index": index})
+    set_virtual_now(store, datetime(2026, 11, 19, 8, 0, tzinfo=JST), REAL)  # 直前の手順（s3）が朝を越えた
+    return timedelta
+
+
+def test_clock_step_waits_for_morning_digests_after_crossing_morning(store, runner):
+    _at_release_gap_step(store)
+    with pytest.raises(StepNotReady, match="朝のまとめ"):
+        runner.next()
+    for team in ("integrated_control", "motor_control", "evaluation", "chief_engineer"):
+        store.create("agent_runs", run(f"run-morning-{team}-20261119", team=team, state="done"))
+    runner.next()
+    assert vnow(store) == datetime(2026, 11, 23, 8, 0, tzinfo=JST)
+
+
+def test_clock_step_stops_waiting_for_morning_digests_after_ten_real_minutes(store, chat_client):
+    timedelta = _at_release_gap_step(store)
+    chat = ChatService(store, chat_client, lambda: vnow(store))
+    late = ScenarioRunner(store, chat, system_now=lambda: REAL + timedelta(minutes=11))
+    late.next()  # 朝のまとめが起動しなかったときに、デモが止まり続けないように
+    assert StoredClock(store, FixedSystem()).now() >= datetime(2026, 11, 23, 8, 0, tzinfo=JST)
