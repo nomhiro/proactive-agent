@@ -65,9 +65,7 @@ def test_post_message_at_night_without_notification_id_follows_held_notification
     assert store.get("messages", out["id"])["notification_id"] == n["id"]
 
 
-def test_post_message_does_not_follow_delivered_silent_or_old_notification(store):
-    call(store, "record_notification", {"classification": "notify_now", "reason": "昼", "origin_artifact_id": SIGNAL_ID},
-         now=DAY)  # 昼の notify_now はすぐ届く
+def test_post_message_does_not_follow_silent_digest_or_old_notification(store):
     call(store, "record_notification", {"classification": "silent", "reason": "静か", "origin_artifact_id": SIGNAL_ID},
          now=DAY)
     call(store, "record_notification", {"classification": "digest", "reason": "朝に", "origin_artifact_id": SIGNAL_ID},
@@ -263,3 +261,26 @@ def test_unknown_feature_error_shows_testcase_title_per_feature(store):
     res = call_raw(store, "add_watch", {"kind": "test_failure_streak", "description": "d", "delivery": "immediate",
                                         "feature": "回生協調", "streak": 1, "requested_by": "tanaka"})
     assert "regen_coord（回生協調 HILS 試験 1 など）" in res["content"][0]["text"]
+
+
+
+# --- Azure 上での確認 6回目 ---
+
+def test_post_message_follows_notify_now_just_delivered_by_day(store):
+    # 統括が notify_now を記録してすぐ、notification_id なしで post_message した。高橋の画面の先頭に並ばなかった
+    ntf = call(store, "record_notification", {"classification": "notify_now", "reason": "昼",
+                                              "origin_artifact_id": SIGNAL_ID}, now=DAY)["id"]
+    soon = call(store, "post_message", {"text": "判断をお願いします"}, now=DAY + timedelta(minutes=2))
+    assert store.get("messages", soon["id"])["notification_id"] == ntf
+    later = call(store, "post_message", {"text": "別の話"}, now=DAY + timedelta(minutes=6))
+    assert store.get("messages", later["id"])["notification_id"] is None
+
+
+def test_finish_run_rejects_chat_run(store):
+    # エージェントがチャットの作業記録を閉じると、画面が返事を書き写さなくなり、佐藤への返事が出なかった
+    store.create("agent_runs", {"id": "run-chat-msg-1", "vehicle_id": "kakuu-suv", "team": "integrated_control",
+                                "state": "running", "title": "チャットへの返事", "started_at": NIGHT.isoformat(),
+                                "detail": {"kind": "chat", "response_id": "r-1", "message_id": "msg-1"}})
+    res = call_raw(store, "finish_run", {"run_id": "run-chat-msg-1", "summary": "返した"})
+    assert res["isError"] is True and "チャット" in res["content"][0]["text"]
+    assert store.get("agent_runs", "run-chat-msg-1")["state"] == "running"

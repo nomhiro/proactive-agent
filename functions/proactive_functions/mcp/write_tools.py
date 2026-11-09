@@ -24,6 +24,7 @@ from .protocol import Registry, Tool
 
 ASSISTANT_AUTHOR = "agent"
 HELD_FOLLOW_WINDOW = timedelta(minutes=30)
+DELIVERED_FOLLOW_WINDOW = timedelta(minutes=5)
 
 
 def new_id(prefix: str) -> str:
@@ -55,6 +56,8 @@ def _held_notification_id(ctx: ToolContext) -> str | None:
 
     調査のメッセージは通知と同じときに届くはずだが、エージェントが notification_id を渡し忘れると、夜でもすぐ
     画面に出てしまう（Azure 上での確認 3回目）。渡されなかったときは、この通知に結びつけて保留する。
+    昼にすぐ届けた notify_now も、記録から5分以内なら結びつける。統括の判断が要るメッセージが、高橋の画面の
+    先頭に並ばなかった（6回目）。
     """
     held = []
     for doc in ctx.store.query("notifications", {"team": ctx.team.value}):
@@ -62,9 +65,11 @@ def _held_notification_id(ctx: ToolContext) -> str | None:
             n = Notification.model_validate(doc)
         except ValueError:
             continue
-        if (n.classification == Classification.NOTIFY_NOW and n.delivered_at is None
-                and n.deliver_at is not None and n.deliver_at > ctx.now
-                and ctx.now - n.created_at <= HELD_FOLLOW_WINDOW):
+        if n.classification != Classification.NOTIFY_NOW or n.deliver_at is None:
+            continue
+        age = ctx.now - n.created_at
+        waiting = n.delivered_at is None and n.deliver_at > ctx.now
+        if (waiting and age <= HELD_FOLLOW_WINDOW) or (not waiting and timedelta(0) <= age <= DELIVERED_FOLLOW_WINDOW):
             held.append(n)
     return max(held, key=lambda n: n.created_at).id if held else None
 
@@ -170,6 +175,9 @@ def finish_run(ctx: ToolContext, args: dict) -> dict:
     if existing is None:
         raise ToolError(f"作業記録がありません: {a.run_id}")
     run = AgentRun.model_validate(existing)
+    if run.detail.get("kind") == "chat":
+        # 閉じると画面が返事を書き写さなくなる（Azure 上での確認 6回目: 佐藤への返事が出なかった）
+        raise ToolError("チャットへの返事の作業記録は、画面が返事を書き写してから閉じる。finish_run は呼ばなくてよい")
     done = run.model_copy(update={"state": "done", "finished_at": ctx.now,
                                   "detail": {**run.detail, "summary": a.summary, **a.detail}})
     try:
