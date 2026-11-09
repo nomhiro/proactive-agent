@@ -16,8 +16,12 @@ from proactive_functions.publisher import PUBLISHED_CONTAINERS, publish_changes
 
 app = func.FunctionApp()
 
+# start_from_beginning: リースに続きの位置（チェックポイント）がまだないとき、最初から読む。既定の「いまから」だと、
+# 新しく起動したインスタンスがそのたびに「いま」から読み始め、起動のきっかけになった文書を読み飛ばす
+# （シナリオテストで、agent_mail と watches のリースは続きの位置が一度も書かれず、メールが届かなかった）。
+# 位置ができたあとは効かない。処理はどれも冪等で、シードの文書は読み飛ばすので、最初から読み直しても害はない
 COSMOS = dict(connection="COSMOS", database_name="%COSMOS_DATABASE%", lease_container_name="leases",
-              create_lease_container_if_not_exists=False)
+              create_lease_container_if_not_exists=False, start_from_beginning=True)
 # Cosmos のトリガーは、既定では例外の出たバッチを再試行せずに読み飛ばす（そのバッチは失われる）。
 # 処理はどれも冪等なので、一時的な失敗は再試行で取り戻す
 RETRY = dict(strategy="exponential_backoff", max_retry_count="5", minimum_interval="00:00:05",

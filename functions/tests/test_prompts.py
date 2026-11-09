@@ -2,7 +2,7 @@ from datetime import datetime
 
 from vehicle_core.constants import JST, Team
 from vehicle_core.impact import ImpactResult
-from vehicle_core.models import Classification, Schedule
+from vehicle_core.models import ChangeEvent, Classification, FieldChange, Schedule
 from vehicle_core.routing import InvestigationRequest
 
 from proactive_functions.prompts import investigation_prompt
@@ -64,3 +64,20 @@ def test_prompt_for_morning_schedule_starts_with_begin_morning_digest():
     assert "begin_morning_digest" in investigation_prompt(r, "run-inv-sch", [s])
     r2, s2 = schedule_req("release_gap_check", {"release_id": "REL-2026.12"})
     assert "begin_morning_digest" not in investigation_prompt(r2, "run-inv-sch", [s2])
+
+
+def change(cid: str, path: str, before, after) -> ChangeEvent:
+    return ChangeEvent(id=cid, artifact_id="SPEC-BRK-04", changed_by="tanaka", changed_at=T0,
+                       changes=[FieldChange(path=path, before=before, after=after)])
+
+
+def test_prompt_for_change_shows_field_before_and_after():  # シナリオテスト s0: 中身を見ずに知らせていた
+    p = investigation_prompt(req_s1, "run-inv-abc", [], [change("chg-001", "attributes.period_ms", 10, 20)])
+    assert "attributes.period_ms" in p and "10" in p and "20" in p
+    assert "説明文だけ" not in p
+
+
+def test_prompt_marks_editorial_only_change():
+    p = investigation_prompt(req_s1, "run-inv-abc", [], [change("chg-001", "description", "目標原則度", "目標減速度")])
+    assert "目標原則度" in p and "目標減速度" in p
+    assert "題名や説明文だけの変更" in p

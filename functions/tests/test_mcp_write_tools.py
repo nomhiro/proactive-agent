@@ -141,6 +141,22 @@ def test_add_and_remove_watch(store):
     assert store.get("watches", out["id"]) is None
 
 
+def test_streak_watch_with_unknown_feature_is_error_listing_known_features(store):  # シナリオテスト s5
+    # 「回生協調」で登録すると、試験結果の feature（regen_coord）と一致せず、見張りが鳴らない
+    res = call_raw(store, "add_watch", {"kind": "test_failure_streak", "description": "回生協調の HILS 失敗はすぐ",
+                                        "delivery": "immediate", "feature": "回生協調", "streak": 1,
+                                        "requested_by": "tanaka"})
+    assert res["isError"] is True
+    assert "regen_coord" in res["content"][0]["text"]
+    assert store.query("watches") == []
+
+
+def test_streak_watch_without_feature_is_error(store):
+    res = call_raw(store, "add_watch", {"kind": "test_failure_streak", "description": "d", "delivery": "digest",
+                                        "requested_by": "tanaka"})
+    assert res["isError"] is True and store.query("watches") == []
+
+
 def test_remove_watch_rejects_other_teams_watch(store):
     wid = call(store, "add_watch", {"kind": "test_failure_streak", "description": "d", "delivery": "digest",
                                     "feature": "regen_coord", "requested_by": "sato"}, team=MC)["id"]

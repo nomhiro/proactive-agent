@@ -15,7 +15,7 @@ from typing import Protocol
 
 from vehicle_core.clock import crossed_morning, to_jst
 from vehicle_core.constants import VEHICLE_ID, Team, agent_name
-from vehicle_core.models import AgentRun, Schedule
+from vehicle_core.models import AgentRun, ChangeEvent, Schedule
 from vehicle_core.routing import InvestigationRequest
 
 from .docs import parse_each
@@ -80,9 +80,15 @@ class FoundryInvoker:
         docs = [d for d in (self.store.get("schedules", sid) for sid in request.source_ids) if d]
         return [s for _, s in parse_each(docs, Schedule)]
 
+    def _changes(self, request: InvestigationRequest) -> list[ChangeEvent]:
+        if request.trigger != "change":
+            return []
+        docs = [d for d in (self.store.get("change_events", cid) for cid in request.source_ids) if d]
+        return [c for _, c in parse_each(docs, ChangeEvent)]
+
     def invoke(self, request: InvestigationRequest) -> None:
         run_id = run_id_for(request.id)
-        prompt = investigation_prompt(request, run_id, self._schedules(request))
+        prompt = investigation_prompt(request, run_id, self._schedules(request), self._changes(request))
         client = self.client_for(request.team)
         conversation_id = client.create_conversation()
         response_id = client.start_response(conversation_id, prompt)

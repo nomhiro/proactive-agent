@@ -60,6 +60,16 @@ def test_invoke_creates_conversation_starts_background_response_and_records_ids(
     assert f"run-inv-{req_s1.id}" in fake.calls[1][2]
 
 
+def test_invoke_puts_change_contents_in_prompt():  # シナリオテスト s0
+    store, fake = MemoryStore(), FakeResponses()
+    store.create("change_events", {"id": "chg-001", "vehicle_id": VEHICLE_ID, "artifact_id": "SIG-BrkPedalPos",
+                                   "changed_by": "tanaka", "changed_at": NOW.isoformat(),
+                                   "changes": [{"path": "attributes.period_ms", "before": 10, "after": 20}]})
+    enqueue(store, [req_s1])
+    FoundryInvoker(store, lambda t: fake, clock).invoke(req_s1)
+    assert "attributes.period_ms" in fake.calls[1][2]
+
+
 def test_invoke_uses_team_agent():
     store, fake, asked = MemoryStore(), FakeResponses(), []
     enqueue(store, [req_s1])
@@ -245,3 +255,17 @@ def test_routine_dispatcher_uses_morning_routine_name():
         dispatch=lambda **kw: calls.append(kw))))
     FoundryRoutineDispatcher("https://p", None, project=project).dispatch(Team.CHIEF_ENGINEER)
     assert calls == [{"routine_name": "morning-asst-chief-engineer"}]
+
+
+def test_morning_dispatch_when_setter_clock_is_ahead_of_functions():  # シナリオテスト: スモークで朝の起動が抜けた
+    from vehicle_core.clock import VirtualClock
+
+    from proactive_functions.clock import StoredClock, set_virtual_now
+    store = MemoryStore()
+    functions_real = VirtualClock(datetime(2026, 11, 9, 10, 25, 0, tzinfo=JST))
+    set_virtual_now(store, datetime(2026, 11, 17, 21, 14, tzinfo=JST), functions_real.now())
+    assert morning_dispatch_due(store, *StoredClock(store, functions_real).read()) is False
+    functions_real.advance(timedelta(seconds=90))
+    set_virtual_now(store, datetime(2026, 11, 18, 8, 0, tzinfo=JST), functions_real.now() + timedelta(seconds=0.5))
+    functions_real.advance(timedelta(seconds=0.1))  # 書き込みの 0.1 秒後に tick が動く
+    assert morning_dispatch_due(store, *StoredClock(store, functions_real).read()) is True

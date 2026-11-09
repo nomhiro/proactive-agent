@@ -5,7 +5,7 @@
 
 import json
 
-from vehicle_core.models import Schedule
+from vehicle_core.models import ChangeEvent, Schedule
 from vehicle_core.routing import InvestigationRequest
 
 TRIGGER_LABELS = {
@@ -41,7 +41,24 @@ def _schedule_lines(schedules: list[Schedule]) -> list[str]:
     return lines
 
 
-def investigation_prompt(req: InvestigationRequest, run_id: str, schedules: list[Schedule]) -> str:
+def _value(v) -> str:
+    return json.dumps(v, ensure_ascii=False) if not isinstance(v, str) else f"「{v}」"
+
+
+def _change_lines(changes: list[ChangeEvent]) -> list[str]:
+    """変更の前と後。trace_impact はつながりから影響範囲を出すので、中身を見ないと誤字の修正でも知らせてしまう。"""
+    if not changes:
+        return []
+    lines = ["変更の中身:"]
+    for c in changes:
+        lines += [f"- {c.artifact_id} の {f.path}: {_value(f.before)} → {_value(f.after)}" for f in c.changes]
+    if not any(c.is_substantive for c in changes):
+        lines.append("- 題名や説明文だけの変更（値や仕様の項目は変わっていない）")
+    return lines
+
+
+def investigation_prompt(req: InvestigationRequest, run_id: str, schedules: list[Schedule],
+                         changes: list[ChangeEvent] | None = None) -> str:
     morning = any(s.task in MORNING_TASKS for s in schedules)
     lines = [
         "調査の依頼です。",
@@ -54,6 +71,7 @@ def investigation_prompt(req: InvestigationRequest, run_id: str, schedules: list
         lines.append(f"- 一致した見張り: {', '.join(req.matched_watch_ids)}")
     lines.append(f"- 知らせ方の下限: {req.floor.value}（これより弱い知らせ方にはしない）")
     lines.append(f"- 作業記録: {run_id}")
+    lines += _change_lines(changes or [])
     lines += _impact_lines(req)
     lines += _schedule_lines(schedules)
     lines += ["", "手順:", "1. 最初に get_now を呼び、いまの時刻と、静かな時間帯かどうかを確かめる。"]

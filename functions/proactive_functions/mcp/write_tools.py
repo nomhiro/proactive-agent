@@ -200,8 +200,18 @@ class AddWatchArgs(_Args):
     streak: int = 3
 
 
+def _known_features(ctx: ToolContext) -> list[str]:
+    """試験ケースの attributes.feature の値。試験結果の feature と同じ値で、見張りはこれと完全一致で比べる。"""
+    return sorted({f for d in ctx.store.query("artifacts") if (f := (d.get("attributes") or {}).get("feature"))})
+
+
 def add_watch(ctx: ToolContext, args: dict) -> dict:
     a = AddWatchArgs.model_validate(args)
+    if a.kind == WatchKind.TEST_FAILURE_STREAK:
+        known = _known_features(ctx)
+        if a.feature not in known:
+            raise ToolError(f"feature は試験ケースの attributes.feature の値で指定してください（{', '.join(known)}）。"
+                            f"受け取った値: {a.feature}")
     w = Watch(id=new_id("w"), team=ctx.team, kind=a.kind, description=a.description, target_ids=a.target_ids,
               feature=a.feature, streak=a.streak, delivery=a.delivery, created_by=a.requested_by,
               created_at=ctx.now)
@@ -268,6 +278,7 @@ TOOLS = [
     Tool("begin_morning_digest", "朝のまとめ（統括は朝のブリーフィング）を始める前に必ず呼ぶ。already_done が true なら、"
          "今日の分は済んでいるか、朝（8:00〜11:59）ではないので、何もせずに終える。", _schema({}, []), begin_morning_digest),
     Tool("add_watch", "見張りを足す。kind は artifact_changed（target_ids の変更）か test_failure_streak（feature の試験が streak 回続けて失敗）。"
+         "feature は試験ケースの attributes.feature の値（例: regen_coord）で、日本語の機能名ではない。"
          "delivery は immediate（すぐ）か digest（朝のまとめ）。requested_by は頼んだ人の ID。",
          _schema({"kind": {"type": "string", "enum": [k.value for k in WatchKind]}, "description": _S,
                   "delivery": {"type": "string", "enum": [d.value for d in DeliveryMode]}, "requested_by": _S,

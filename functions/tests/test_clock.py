@@ -38,3 +38,13 @@ def test_stored_clock_read_returns_now_and_offset_together():  # tick の朝の 
     now, offset = StoredClock(store, real).read()
     assert now == datetime(2026, 11, 8, 13, 0, tzinfo=JST) and offset == 3600.0
     assert StoredClock(MemoryStore(), real).read() == (real.now(), 0.0)
+
+
+def test_reader_with_slower_clock_never_sees_before_target():  # シナリオテスト: PC の時計が 0.5 秒進んでいると 7:59:59 に見えた
+    store = MemoryStore()
+    setter = datetime(2026, 11, 9, 10, 51, 13, 500000, tzinfo=JST)
+    set_virtual_now(store, datetime(2026, 11, 18, 8, 0, tzinfo=JST), setter)
+    functions_real = VirtualClock(setter - timedelta(seconds=0.4))  # Functions の時計は 0.5 秒遅れ、0.1 秒後に読む
+    assert StoredClock(store, functions_real).now() == datetime(2026, 11, 18, 8, 0, tzinfo=JST)
+    functions_real.advance(timedelta(seconds=10))  # ずれより長く経てば、ふつうに流れる
+    assert StoredClock(store, functions_real).now() == datetime(2026, 11, 18, 8, 0, 9, 600000, tzinfo=JST)
