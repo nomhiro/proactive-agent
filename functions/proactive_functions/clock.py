@@ -1,6 +1,11 @@
 """Cosmos に置いた仮想時計（実時間 + ずれ）。Functions の中の現在時刻はすべてここから取る。
 
-文書: system コンテナーの {"id": "clock", "vehicle_id": ..., "offset_seconds": float, "updated_at": ISO}
+文書: system コンテナーの {"id": "clock", "vehicle_id": ..., "offset_seconds": float, "virtual_at": ISO,
+"updated_at": ISO}
+
+virtual_at は合わせた時刻。合わせた側（PC や BFF）と読む側（Functions）の実時間は1秒ほどずれることがあり、
+合わせた直後に読むと合わせた時刻より前に見える（8:00 に合わせたのに tick には 7:59:59 に見え、朝の起動が抜けた）。
+そこで、読む時刻は virtual_at より前にしない。ずれより長く経てば、ふつうに「実時間 + ずれ」で流れる。
 """
 
 from datetime import datetime, timedelta
@@ -26,7 +31,10 @@ class StoredClock:
         """いまの仮想の時刻と、ずれ（秒）を、同じ文書から読む。"""
         doc = self._store.get(CLOCK_CONTAINER, CLOCK_ID)
         offset = float(doc["offset_seconds"]) if doc else 0.0
-        return to_jst(self._system.now() + timedelta(seconds=offset)), offset
+        now = to_jst(self._system.now() + timedelta(seconds=offset))
+        if doc and doc.get("virtual_at"):
+            now = max(now, to_jst(datetime.fromisoformat(doc["virtual_at"])))
+        return now, offset
 
 
 def set_virtual_now(store: Store, target: datetime, system_now: datetime) -> None:
@@ -35,5 +43,6 @@ def set_virtual_now(store: Store, target: datetime, system_now: datetime) -> Non
         "id": CLOCK_ID,
         "vehicle_id": VEHICLE_ID,
         "offset_seconds": offset,
+        "virtual_at": to_jst(target).isoformat(),
         "updated_at": to_jst(system_now).isoformat(),
     })

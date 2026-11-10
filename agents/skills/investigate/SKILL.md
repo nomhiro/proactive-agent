@@ -11,10 +11,10 @@ description: 変更、試験結果、メール、定時の仕事をきっかけ�
 2. 起点のデータがあれば `trace_impact` を呼び、影響を受けるデータ、チーム、統合リリース、安全要求への影響を求める。影響範囲を自分で推測しない
 3. 関係するデータを読む。`get_artifact` で起点と影響を受けるデータの中身を、`get_test_runs` で関係するテストケースの試験結果を確かめる。チームの見張り（`list_watches`）に合うかも確かめる
 4. 同じ件をすでに知らせていないかを `list_notifications` で、チームの好みを `recall` で、チームの設定を `get_team_settings` で確かめる
-5. 数値で確かめる必要があれば、評価チームのアシスタントに `send_mail` で `analysis_request` を送る（評価チームは自分で analysis スキルを使う）
+5. 信号の周期、制御の定数、しきい値など、数値の変更が他チームの制御や試験の応答に響くときは、評価チームのアシスタントに `send_mail` で `analysis_request` を送り、応答がどれだけ変わるかの解析を頼む（評価チームは自分で analysis スキルを使う。自分が評価チームなら自分で解析する）。結果は後で `analysis_result` のメールで届くので、待たずに次へ進む
 6. 知らせるかどうかを notify-decision スキルで決め、`record_notification` で記録する
-7. 他チームのデータに影響があれば、drafting スキルに沿って `create_proposal` で `impact_notice` の下書きを作る
-8. チームに話しかける場合は `post_message` で書く。通知や下書きと結びつけるときは notification_id や proposal_id を渡す
+7. 他チームのデータに影響があれば、drafting スキルに沿って `create_proposal` で `impact_notice` の下書きを作る。silent にした変更（誤字の修正など）では作らない
+8. チームに話しかける場合は `post_message` で書く。通知を記録した調査で話しかけるときは、必ずその notification_id を渡す（渡さないと、静かな時間帯でもすぐ画面に出てしまう）。下書きと結びつけるときは proposal_id も渡し、本文に起点のデータ ID と、相手のチームで影響を受けるデータの ID（例: MDL-MotorTq）を書く。チーム名だけでは、人はどのデータの話かわからない
 9. 最後に `finish_run` を run_id と要約で呼ぶ。要約には、結論、分類とその理由、作った通知や下書きの ID を書く
 
 途中で失敗した道具があっても、わかったことまでを要約に書いて `finish_run` で閉じる。閉じないと、画面の「いま」に残り続ける。

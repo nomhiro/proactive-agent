@@ -82,7 +82,7 @@ def test_tool_names_in_content_exist_in_registry():
 # 道具名ではないが `` で書いてよい語（メールの種類、分類、状態、引数の名前）
 KNOWN_NON_TOOLS = {
     "impact_notice", "analysis_request", "analysis_result", "human_reply", "notify_now", "already_done",
-    "run_id", "item_id", "release_gap_check", "in_quiet_hours", "regen_model",
+    "run_id", "item_id", "release_gap_check", "in_quiet_hours", "regen_model", "source_message_id",
 }
 
 
@@ -105,3 +105,27 @@ def test_team_instructions_answer_a2a_questions_in_text():
     for t in ["integrated_control", "motor_control", "evaluation"]:
         text = read(AGENTS / "instructions" / f"{t}.md")
         assert "## 統括から尋ねられたとき" in text and "文章で答える" in text, t
+
+
+def test_every_instruction_explains_chat_replies():  # Plan 4 決定 21
+    for t in TEAMS:
+        text = read(AGENTS / "instructions" / f"{t}.md")
+        assert "## チャットで話しかけられたとき" in text, t
+        section = text.split("## チャットで話しかけられたとき")[1].split("\n## ")[0]
+        assert "source_message_id" in section and "post_message" in section, t
+
+
+def test_team_instructions_explain_escalation():  # Plan 4 決定 21
+    for t in ["integrated_control", "motor_control", "evaluation"]:
+        text = read(AGENTS / "instructions" / f"{t}.md")
+        assert "## チーフエンジニアに判断を仰ぐとき" in text, t
+        section = text.split("## チーフエンジニアに判断を仰ぐとき")[1].split("\n## ")[0]
+        assert "escalation" in section and "chief_engineer" in section, t
+
+
+def test_messages_are_linked_to_recorded_notifications():  # Plan 4 決定 22
+    skill = read(AGENTS / "skills" / "investigate" / "SKILL.md")
+    assert "必ずその notification_id を渡す" in skill
+    chief = read(AGENTS / "instructions" / "chief_engineer.md")
+    section = chief.split("## 判断が必要なことを上げるとき")[1].split("\n## ")[0]
+    assert section.index("record_notification") < section.index("post_message")

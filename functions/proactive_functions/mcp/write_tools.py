@@ -23,6 +23,8 @@ from .context import ToolContext, ToolError
 from .protocol import Registry, Tool
 
 ASSISTANT_AUTHOR = "agent"
+HELD_FOLLOW_WINDOW = timedelta(minutes=30)
+DELIVERED_FOLLOW_WINDOW = timedelta(minutes=5)
 
 
 def new_id(prefix: str) -> str:
@@ -49,10 +51,34 @@ class PostMessageArgs(_Args):
     attachments: list[str] = []
 
 
+def _held_notification_id(ctx: ToolContext) -> str | None:
+    """このチームが直前に記録し、まだ届けていない notify_now の通知（静かな時間帯で翌朝まで保留されたもの）。
+
+    調査のメッセージは通知と同じときに届くはずだが、エージェントが notification_id を渡し忘れると、夜でもすぐ
+    画面に出てしまう（Azure 上での確認 3回目）。渡されなかったときは、この通知に結びつけて保留する。
+    昼にすぐ届けた notify_now も、記録から5分以内なら結びつける。統括の判断が要るメッセージが、高橋の画面の
+    先頭に並ばなかった（6回目）。
+    """
+    held = []
+    for doc in ctx.store.query("notifications", {"team": ctx.team.value}):
+        try:
+            n = Notification.model_validate(doc)
+        except ValueError:
+            continue
+        if n.classification != Classification.NOTIFY_NOW or n.deliver_at is None:
+            continue
+        age = ctx.now - n.created_at
+        waiting = n.delivered_at is None and n.deliver_at > ctx.now
+        if (waiting and age <= HELD_FOLLOW_WINDOW) or (not waiting and timedelta(0) <= age <= DELIVERED_FOLLOW_WINDOW):
+            held.append(n)
+    return max(held, key=lambda n: n.created_at).id if held else None
+
+
 def post_message(ctx: ToolContext, args: dict) -> dict:
     a = PostMessageArgs.model_validate(args)
+    notification_id = a.notification_id or _held_notification_id(ctx)
     m = Message(id=new_id("msg"), team=ctx.team, role=MessageRole.ASSISTANT, author=ASSISTANT_AUTHOR, text=a.text,
-                notification_id=a.notification_id, proposal_id=a.proposal_id, attachments=a.attachments,
+                notification_id=notification_id, proposal_id=a.proposal_id, attachments=a.attachments,
                 created_at=ctx.now)
     return {"id": _save(ctx, "messages", m)["id"]}
 
@@ -67,6 +93,8 @@ class CreateProposalArgs(_Args):
 
 def create_proposal(ctx: ToolContext, args: dict) -> dict:
     a = CreateProposalArgs.model_validate(args)
+    if ctx.team in a.to_teams:
+        raise ToolError("自チームあての下書きは作れません。自チームの人には post_message で伝えてください")
     p = Proposal(id=new_id("prop"), team=ctx.team, kind=a.kind, to_teams=a.to_teams, draft=a.draft,
                  related_artifact_ids=a.related_artifact_ids, thread_id=a.thread_id or new_id("th"),
                  created_at=ctx.now)
@@ -147,6 +175,9 @@ def finish_run(ctx: ToolContext, args: dict) -> dict:
     if existing is None:
         raise ToolError(f"作業記録がありません: {a.run_id}")
     run = AgentRun.model_validate(existing)
+    if run.detail.get("kind") == "chat":
+        # 閉じると画面が返事を書き写さなくなる（Azure 上での確認 6回目: 佐藤への返事が出なかった）
+        raise ToolError("チャットへの返事の作業記録は、画面が返事を書き写してから閉じる。finish_run は呼ばなくてよい")
     done = run.model_copy(update={"state": "done", "finished_at": ctx.now,
                                   "detail": {**run.detail, "summary": a.summary, **a.detail}})
     try:
@@ -200,12 +231,36 @@ class AddWatchArgs(_Args):
     streak: int = 3
 
 
+def _testcases_by_feature(ctx: ToolContext) -> dict[str, list[dict]]:
+    """試験ケースを attributes.feature の値でまとめる（ID 順）。試験結果の feature と同じ値で、見張りはこれと完全一致で比べる。"""
+    by_feature: dict[str, list[dict]] = {}
+    for d in sorted(ctx.store.query("artifacts"), key=lambda d: d["id"]):
+        if f := (d.get("attributes") or {}).get("feature"):
+            by_feature.setdefault(f, []).append(d)
+    return dict(sorted(by_feature.items()))
+
+
 def add_watch(ctx: ToolContext, args: dict) -> dict:
+    """試験の失敗の見張りは、見る試験ケースの題名を返す。値が正しくても、依頼と違う機能を選ぶことがあった
+    （Azure 上での確認 5回目: 「回生協調」の依頼で motor_torque）。"""
     a = AddWatchArgs.model_validate(args)
+    watched = []
+    if a.kind == WatchKind.TEST_FAILURE_STREAK:
+        by_feature = _testcases_by_feature(ctx)
+        if a.feature not in by_feature:
+            known = ", ".join(f"{f}（{cases[0].get('title', '')}{' など' if len(cases) > 1 else ''}）"
+                              for f, cases in by_feature.items())
+            raise ToolError(f"feature は試験ケースの attributes.feature の値で指定してください（{known}）。"
+                            f"受け取った値: {a.feature}")
+        watched = [f"{d['id']}: {d.get('title', '')}" for d in by_feature[a.feature]]
     w = Watch(id=new_id("w"), team=ctx.team, kind=a.kind, description=a.description, target_ids=a.target_ids,
               feature=a.feature, streak=a.streak, delivery=a.delivery, created_by=a.requested_by,
               created_at=ctx.now)
-    return {"id": _save(ctx, "watches", w)["id"]}
+    out = {"id": _save(ctx, "watches", w)["id"]}
+    if watched:
+        out |= {"watched_testcases": watched,
+                "note": "見張る試験が依頼と違えば、remove_watch で消して、正しい feature で足し直す"}
+    return out
 
 
 class RemoveWatchArgs(_Args):
@@ -268,6 +323,7 @@ TOOLS = [
     Tool("begin_morning_digest", "朝のまとめ（統括は朝のブリーフィング）を始める前に必ず呼ぶ。already_done が true なら、"
          "今日の分は済んでいるか、朝（8:00〜11:59）ではないので、何もせずに終える。", _schema({}, []), begin_morning_digest),
     Tool("add_watch", "見張りを足す。kind は artifact_changed（target_ids の変更）か test_failure_streak（feature の試験が streak 回続けて失敗）。"
+         "feature は試験ケースの attributes.feature の値（例: regen_coord）で、日本語の機能名ではない。"
          "delivery は immediate（すぐ）か digest（朝のまとめ）。requested_by は頼んだ人の ID。",
          _schema({"kind": {"type": "string", "enum": [k.value for k in WatchKind]}, "description": _S,
                   "delivery": {"type": "string", "enum": [d.value for d in DeliveryMode]}, "requested_by": _S,

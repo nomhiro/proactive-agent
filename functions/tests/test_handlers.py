@@ -64,6 +64,36 @@ def test_third_hils_failure_with_watch_enqueues(store):
     assert [store.get("investigations", i)["floor"] for i in ids[:-1]] == ["silent", "silent"]
 
 
+def _streak_watch(store, streak: int) -> None:
+    store.create("watches", Watch(id=f"w{streak}", team="integrated_control", kind="test_failure_streak",
+                                  description="回生協調の HILS", feature="regen_coord", streak=streak,
+                                  delivery="immediate", created_by="tanaka",
+                                  created_at=SEED_NOW).model_dump(mode="json"))
+
+
+@pytest.mark.parametrize("streak, fires_on", [(1, "run-s2-1"), (3, "run-s2-3")])
+def test_hils_failures_in_one_batch_fire_streak_watch(store, streak, fires_on):
+    # シナリオの手順は時計を進めて結果を続けて入れるので、変更フィードには3件まとめて届く。
+    # 1件目を判定するとき、後の2件が「より新しい結果」に見えて見張りが鳴らなかった（Azure 上での確認 2回目）
+    _streak_watch(store, streak)
+    docs = [st.test_run.model_dump(mode="json") for st in SCENARIOS["s2_hils_streak"].steps]
+    for doc in docs:
+        store.create("test_runs", doc)
+    handle_test_runs(docs, store)
+    matched = {r["source_ids"][0]: r["matched_watch_ids"] for r in store.query("investigations")}
+    assert matched == {d["id"]: ([f"w{streak}"] if d["id"] == fires_on else []) for d in docs}
+
+
+def test_hils_failure_fires_when_later_run_is_already_stored(store):
+    # 2件目が先に書かれ、1件目が別の束で届いても同じ判定になる
+    _streak_watch(store, 1)
+    first, second = [st.test_run.model_dump(mode="json") for st in SCENARIOS["s2_hils_streak"].steps[:2]]
+    store.create("test_runs", first)
+    store.create("test_runs", second)
+    [rid] = handle_test_runs([first], store)
+    assert store.get("investigations", rid)["matched_watch_ids"] == ["w1"]
+
+
 def test_impact_notice_mail_wakes_recipient_with_notify_now(store):
     mail = AgentMail(id="am-1", thread_id="th-1", from_team="integrated_control", to_team="motor_control",
                      kind="impact_notice", body="MDL-MotorTq に影響", related_artifact_ids=["SIG-BrkPedalPos"],

@@ -1,2 +1,2 @@
 [tool.uv.workspace]
-members = ["core", "functions", "deploy"]
+members = ["core", "functions", "deploy", "web"]

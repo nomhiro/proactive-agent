@@ -12,6 +12,15 @@ services:
         run: uv run python ../scripts/package_functions.py prepare
       postpackage:
         run: uv run python ../scripts/package_functions.py cleanup
+  # Web アプリ（BFF と画面）。ビルドの文脈はリポジトリの直下、イメージは ACR でビルドする
+  web:
+    project: ./web
+    language: python
+    host: containerapp
+    docker:
+      path: ./Dockerfile
+      context: ..
+      remoteBuild: true
 hooks:
   postprovision:
     run: uv run --package proactive-functions python scripts/seed.py

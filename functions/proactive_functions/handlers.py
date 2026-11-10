@@ -43,8 +43,10 @@ def handle_test_runs(docs: list[dict], store: Store) -> list[str]:
     graph, watches = load_graph(store), _watches(store)
     created = []
     for run in runs:
+        # 履歴はその結果より前に実行されたものだけ。変更フィードは結果をまとめて届けるので、
+        # 後の結果も Store に入っている。それを含めると、遅れて届いた古い結果とみなされて見張りが鳴らない
         history = [r for r in models(store.query("test_runs", {"feature": run.feature}), TestRun)
-                   if r.id != run.id]
+                   if r.id != run.id and r.executed_at < run.executed_at]
         created += enqueue(store, route_test_run(run, history, graph, watches))
     return created
 

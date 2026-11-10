@@ -42,6 +42,11 @@ class FakeResponses:
         self.calls.append(("response_status", response_id))
         return self.statuses[response_id]
 
+    def cancel_response(self, response_id: str) -> None:
+        self.calls.append(("cancel_response", response_id))
+        if self.fail:
+            raise RuntimeError("cancel failed")
+
 
 def clock():
     return NOW
@@ -59,6 +64,72 @@ def test_invoke_creates_conversation_starts_background_response_and_records_ids(
     assert run["team"] == req_s1.team.value
     assert f"run-inv-{req_s1.id}" in fake.calls[1][2]
 
+
+def test_invoke_puts_change_contents_in_prompt():  # シナリオテスト s0
+    store, fake = MemoryStore(), FakeResponses()
+    store.create("change_events", {"id": "chg-001", "vehicle_id": VEHICLE_ID, "artifact_id": "SIG-BrkPedalPos",
+                                   "changed_by": "tanaka", "changed_at": NOW.isoformat(),
+                                   "changes": [{"path": "attributes.period_ms", "before": 10, "after": 20}]})
+    enqueue(store, [req_s1])
+    FoundryInvoker(store, lambda t: fake, clock).invoke(req_s1)
+    assert "attributes.period_ms" in fake.calls[1][2]
+
+
+def test_invoke_puts_mail_contents_in_prompt_and_skips_non_mail_ids():  # Azure 上での確認 2回目
+    store, fake = MemoryStore(), FakeResponses()
+    store.create("agent_mail", {"id": "am-9", "vehicle_id": VEHICLE_ID, "thread_id": "th-9",
+                                "from_team": "integrated_control", "to_team": "evaluation",
+                                "kind": "analysis_request", "body": "周期 20ms で応答を見たい",
+                                "created_at": NOW.isoformat()})
+    req = req_s1.model_copy(update={"trigger": "mail", "source_ids": ["am-9", "overdue:th-1"], "impact": None})
+    enqueue(store, [req])
+    FoundryInvoker(store, lambda t: fake, clock).invoke(req)
+    assert "周期 20ms で応答を見たい" in fake.calls[1][2] and "th-9" in fake.calls[1][2]
+
+
+
+def _analysis_mail(store, kind="analysis_result"):
+    store.create("agent_mail", {"id": "am-r", "vehicle_id": VEHICLE_ID, "thread_id": "th-9",
+                                "from_team": "evaluation", "to_team": "integrated_control",
+                                "kind": kind, "body": "遅れは +15 ms", "stance": "cannot" if kind == "human_reply" else None,
+                                "related_artifact_ids": ["SIG-BrkPedalPos"], "created_at": NOW.isoformat()})
+    return req_s1.model_copy(update={"team": Team.INTEGRATED_CONTROL, "trigger": "mail",
+                                     "source_ids": ["am-r"], "impact": None})
+
+
+def _proposal(store, id_, origin, status="pending", team="integrated_control"):
+    store.create("proposals", {"id": id_, "vehicle_id": VEHICLE_ID, "team": team, "kind": "impact_notice",
+                               "to_teams": ["motor_control"], "draft": "x", "related_artifact_ids": [origin],
+                               "thread_id": "th-p", "status": status, "created_at": NOW.isoformat()})
+
+
+def test_invoke_after_analysis_result_says_draft_not_made_yet():  # Azure 上での確認 4回目
+    store, fake = MemoryStore(), FakeResponses()
+    req = _analysis_mail(store)
+    _proposal(store, "prop-other", "SPEC-BRK-04")
+    _proposal(store, "prop-rejected", "SIG-BrkPedalPos", status="rejected")
+    _proposal(store, "prop-mc", "SIG-BrkPedalPos", team="motor_control")
+    enqueue(store, [req])
+    FoundryInvoker(store, lambda t: fake, clock).invoke(req)
+    prompt = fake.calls[1][2]
+    assert "まだない" in prompt and "prop-other" not in prompt and "prop-mc" not in prompt
+
+
+def test_invoke_after_analysis_result_lists_existing_draft():
+    store, fake = MemoryStore(), FakeResponses()
+    req = _analysis_mail(store)
+    _proposal(store, "prop-1", "SIG-BrkPedalPos")
+    enqueue(store, [req])
+    FoundryInvoker(store, lambda t: fake, clock).invoke(req)
+    assert "prop-1" in fake.calls[1][2] and "まだない" not in fake.calls[1][2]
+
+
+def test_invoke_after_human_reply_has_no_draft_line():
+    store, fake = MemoryStore(), FakeResponses()
+    req = _analysis_mail(store, kind="human_reply")
+    enqueue(store, [req])
+    FoundryInvoker(store, lambda t: fake, clock).invoke(req)
+    assert "下書き" not in fake.calls[1][2]
 
 def test_invoke_uses_team_agent():
     store, fake, asked = MemoryStore(), FakeResponses(), []
@@ -132,6 +203,18 @@ def test_reconcile_leaves_in_progress_and_recent_runs():
     assert ("response_status", "resp-r") not in fake.calls
     assert all(store.get("agent_runs", i)["state"] == "running"
                for i in ["run-recent", "run-busy", "run-queued", "run-noresp"])
+
+
+def test_reconcile_runs_skips_chat_runs():
+    # detail.kind == "chat" の running の記録は、応答が completed でも閉じない（Plan 4 決定 6）
+    store = MemoryStore()
+    store.create("agent_runs", {"id": "run-chat-msg-1", "vehicle_id": VEHICLE_ID, "team": "motor_control",
+                                "state": "running", "title": "t", "started_at": (NOW - timedelta(minutes=5)).isoformat(),
+                                "detail": {"kind": "chat", "response_id": "resp-1"}})
+    fake = FakeResponses({"resp-1": "completed"})
+    assert reconcile_runs(store, lambda t: fake, NOW) == []
+    assert store.get("agent_runs", "run-chat-msg-1")["state"] == "running"
+    assert fake.calls == []
 
 
 def test_reconcile_survives_status_lookup_error():
@@ -233,3 +316,63 @@ def test_routine_dispatcher_uses_morning_routine_name():
         dispatch=lambda **kw: calls.append(kw))))
     FoundryRoutineDispatcher("https://p", None, project=project).dispatch(Team.CHIEF_ENGINEER)
     assert calls == [{"routine_name": "morning-asst-chief-engineer"}]
+
+
+def test_morning_dispatch_when_setter_clock_is_ahead_of_functions():  # シナリオテスト: スモークで朝の起動が抜けた
+    from vehicle_core.clock import VirtualClock
+
+    from proactive_functions.clock import StoredClock, set_virtual_now
+    store = MemoryStore()
+    functions_real = VirtualClock(datetime(2026, 11, 9, 10, 25, 0, tzinfo=JST))
+    set_virtual_now(store, datetime(2026, 11, 17, 21, 14, tzinfo=JST), functions_real.now())
+    assert morning_dispatch_due(store, *StoredClock(store, functions_real).read()) is False
+    functions_real.advance(timedelta(seconds=90))
+    set_virtual_now(store, datetime(2026, 11, 18, 8, 0, tzinfo=JST), functions_real.now() + timedelta(seconds=0.5))
+    functions_real.advance(timedelta(seconds=0.1))  # 書き込みの 0.1 秒後に tick が動く
+    assert morning_dispatch_due(store, *StoredClock(store, functions_real).read()) is True
+
+
+
+# --- Azure 上での確認（画面）: 評価の解析の応答が Foundry で in_progress のまま2時間止まり、時計を進められなかった ---
+
+REAL = datetime(2026, 11, 9, 21, 0, tzinfo=JST)
+
+
+def test_invoke_records_real_start_time():
+    store, fake = MemoryStore(), FakeResponses()
+    enqueue(store, [req_s1])
+    FoundryInvoker(store, lambda t: fake, clock, system_now=lambda: REAL).invoke(req_s1)
+    assert store.get("agent_runs", f"run-inv-{req_s1.id}")["detail"]["started_real_at"] == REAL.isoformat()
+
+
+def _running_real(store, run_id, real_started, response_id):
+    running(store, run_id, NOW - timedelta(minutes=10), response_id=response_id)
+    doc = store.get("agent_runs", run_id)
+    store.upsert("agent_runs", doc | {"detail": doc["detail"] | {"started_real_at": real_started.isoformat()}})
+
+
+def test_reconcile_times_out_response_stuck_in_progress_by_real_time():
+    store = MemoryStore()
+    _running_real(store, "run-stuck", REAL - timedelta(minutes=31), "resp-s")
+    _running_real(store, "run-busy", REAL - timedelta(minutes=29), "resp-b")
+    fake = FakeResponses({"resp-s": "in_progress", "resp-b": "in_progress"})
+    assert reconcile_runs(store, lambda t: fake, NOW, system_now=lambda: REAL) == ["run-stuck"]
+    stuck = store.get("agent_runs", "run-stuck")
+    assert stuck["state"] == "done" and stuck["detail"]["error"] == "timeout"
+    assert ("cancel_response", "resp-s") in fake.calls and ("cancel_response", "resp-b") not in fake.calls
+    assert store.get("agent_runs", "run-busy")["state"] == "running"
+
+
+def test_reconcile_closes_timed_out_run_even_if_cancel_fails():
+    store = MemoryStore()
+    _running_real(store, "run-stuck", REAL - timedelta(hours=2), "resp-s")
+    fake = FakeResponses({"resp-s": "queued"}, fail=True)
+    assert reconcile_runs(store, lambda t: fake, NOW, system_now=lambda: REAL) == ["run-stuck"]
+
+
+def test_reconcile_does_not_time_out_run_without_real_start_time():
+    # 仮想の時計は大きく跳ぶので、仮想の経過時間では時間切れにしない
+    store = MemoryStore()
+    running(store, "run-old", NOW - timedelta(hours=10), response_id="resp-o")
+    fake = FakeResponses({"resp-o": "in_progress"})
+    assert reconcile_runs(store, lambda t: fake, NOW, system_now=lambda: REAL) == []

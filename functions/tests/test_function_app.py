@@ -38,3 +38,11 @@ def test_change_feed_functions_have_retry_policy():  # 最終レビューの指�
     for f in cosmos:
         policy = f.get_settings_dict("retry_policy")
         assert policy and policy["strategy"] == "exponential_backoff", f.get_function_name()
+
+
+def test_change_feed_functions_start_from_beginning_without_checkpoint():  # シナリオテスト: メールを読み飛ばした
+    import function_app
+    importlib.reload(function_app)
+    cosmos = [f for f in function_app.app.get_functions() if f.get_trigger().get_binding_name() == "cosmosDBTrigger"]
+    for f in cosmos:
+        assert f.get_trigger().get_dict_repr().get("startFromBeginning") is True, f.get_function_name()

@@ -27,3 +27,9 @@ Thumbs.db
 # Functions のデプロイ用に生成するもの（scripts/package_functions.py）
 functions/vehicle_core/
 functions/requirements.txt
+
+# Web アプリの画面のビルド結果（web/frontend の npm run build）
+web/proactive_web/static/
+
+# Playwright MCP のスクリーンショットとスナップショット
+.playwright-mcp/

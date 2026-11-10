@@ -1,0 +1,15 @@
+# web/Dockerfile のビルドの文脈（リポジトリの直下）から外すもの
+.git
+.azure
+.venv
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/node_modules
+.superpowers
+.playwright-mcp
+spikes
+docs
+web/proactive_web/static
+functions/vehicle_core
+functions/requirements.txt

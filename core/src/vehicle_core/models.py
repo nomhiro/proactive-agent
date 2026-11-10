@@ -129,6 +129,8 @@ class TeamSettings(BaseModel):
     members: list[Person] = []
     # このチームのアシスタント（エージェント ID）の client ID。書き込み窓口が呼び出し元のチームを決めるのに使う
     agent_client_id: str | None = None
+    # チームのチャットの会話 ID。BFF が最初のチャットで作る（シードの作り直しでは引き継がない）
+    chat_conversation_id: str | None = None
 
 
 class MailKind(StrEnum):
